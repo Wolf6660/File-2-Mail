@@ -12,6 +12,7 @@ services:
       - "8000:8000" # Webinterface
     volumes:
       - ./data:/app/data
+      - /mein/pfad:/storage
     restart: unless-stopped
 ```
 
