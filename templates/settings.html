@@ -114,7 +114,7 @@
                         </div>
                     </label>
                     <label>
-                        <span>Mindestalter einer Datei in Sekunden</span>
+                        <span>Minimum Alter einer Datei in Sekunden <button class="info-badge" type="button" data-tooltip="Die Datei wird erst verarbeitet, wenn sie mindestens so alt ist. Das hilft bei Scannern, die eine PDF schon waehrend des Schreibens im Ordner anlegen.">i</button></span>
                         <input type="number" name="file_min_age_seconds" value="{{ settings['file_min_age_seconds'] }}" min="0" required>
                     </label>
                     <label>
@@ -157,6 +157,18 @@
                     <label>
                         <span>Anzeigename</span>
                         <input type="text" name="display_name" placeholder="Rechnungen Eingang" required>
+                    </label>
+                    <label>
+                        <span>Benachrichtigungs-E-Mail optional</span>
+                        <input type="email" name="notify_email" placeholder="status@example.de">
+                    </label>
+                    <label class="checkbox">
+                        <input type="checkbox" name="notify_on_success" value="1">
+                        <span>Bei erfolgreichem Versand benachrichtigen</span>
+                    </label>
+                    <label class="checkbox">
+                        <input type="checkbox" name="notify_on_error" value="1" checked>
+                        <span>Bei Fehler benachrichtigen</span>
                     </label>
                     <button class="button" type="submit">Ordner speichern</button>
                 </form>
@@ -455,6 +467,12 @@
                 wrapper.querySelector(".remove-recipient").addEventListener("click", () => wrapper.remove());
             });
         }
+
+        document.querySelectorAll(".info-badge").forEach((button) => {
+            button.addEventListener("click", () => {
+                window.alert(button.dataset.tooltip);
+            });
+        });
     </script>
 </body>
 </html>

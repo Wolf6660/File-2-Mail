@@ -79,6 +79,9 @@ def init_db() -> None:
                 folder_path TEXT NOT NULL,
                 recipient_email TEXT NOT NULL,
                 additional_recipients TEXT NOT NULL DEFAULT '',
+                notify_email TEXT NOT NULL DEFAULT '',
+                notify_on_success INTEGER NOT NULL DEFAULT 0,
+                notify_on_error INTEGER NOT NULL DEFAULT 1,
                 display_name TEXT NOT NULL DEFAULT '',
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
@@ -102,6 +105,18 @@ def init_db() -> None:
         if "additional_recipients" not in watched_folder_columns:
             connection.execute(
                 "ALTER TABLE watched_folders ADD COLUMN additional_recipients TEXT NOT NULL DEFAULT ''"
+            )
+        if "notify_email" not in watched_folder_columns:
+            connection.execute(
+                "ALTER TABLE watched_folders ADD COLUMN notify_email TEXT NOT NULL DEFAULT ''"
+            )
+        if "notify_on_success" not in watched_folder_columns:
+            connection.execute(
+                "ALTER TABLE watched_folders ADD COLUMN notify_on_success INTEGER NOT NULL DEFAULT 0"
+            )
+        if "notify_on_error" not in watched_folder_columns:
+            connection.execute(
+                "ALTER TABLE watched_folders ADD COLUMN notify_on_error INTEGER NOT NULL DEFAULT 1"
             )
 
         existing = {
@@ -145,7 +160,9 @@ def get_watched_folders() -> list[sqlite3.Row]:
         return list(
             connection.execute(
                 """
-                SELECT id, folder_path, recipient_email, additional_recipients, display_name, is_active, created_at
+                SELECT id, folder_path, recipient_email, additional_recipients,
+                       notify_email, notify_on_success, notify_on_error,
+                       display_name, is_active, created_at
                 FROM watched_folders
                 ORDER BY is_active DESC, recipient_email ASC, folder_path ASC
                 """
@@ -185,6 +202,9 @@ def insert_watched_folder(
     folder_path: str,
     recipient_email: str,
     additional_recipients: list[str] | None,
+    notify_email: str,
+    notify_on_success: bool,
+    notify_on_error: bool,
     display_name: str,
 ) -> None:
     normalized = str(Path(folder_path).expanduser())
@@ -192,13 +212,20 @@ def insert_watched_folder(
     with db_cursor() as connection:
         connection.execute(
             """
-            INSERT INTO watched_folders(folder_path, recipient_email, additional_recipients, display_name, created_at)
-            VALUES(?, ?, ?, ?, ?)
+            INSERT INTO watched_folders(
+                folder_path, recipient_email, additional_recipients,
+                notify_email, notify_on_success, notify_on_error,
+                display_name, created_at
+            )
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 normalized,
                 primary_recipient,
                 extra_recipients,
+                notify_email.strip(),
+                1 if notify_on_success else 0,
+                1 if notify_on_error else 0,
                 display_name.strip(),
                 datetime.now().isoformat(),
             ),
@@ -477,6 +504,46 @@ def send_test_email(settings: dict[str, str], recipient_email: str) -> None:
         server.send_message(msg)
 
 
+def send_status_notification(
+    settings: dict[str, str],
+    notify_email: str,
+    folder_row: sqlite3.Row,
+    file_path: Path,
+    status: str,
+    details: str,
+) -> None:
+    if not notify_email.strip():
+        return
+
+    sender_email = settings["sender_email"].strip() or settings["smtp_username"].strip()
+    sender_name = settings["sender_name"].strip()
+    from_value = sender_email if not sender_name else f"{sender_name} <{sender_email}>"
+
+    msg = EmailMessage()
+    msg["From"] = from_value
+    msg["To"] = notify_email.strip()
+    msg["Subject"] = f"File-2-Mail {status}: {file_path.name}"
+    msg.set_content(
+        "\n".join(
+            [
+                f"Status: {status}",
+                f"Anzeigename: {folder_row['display_name'] or '-'}",
+                f"Ordner: {folder_row['folder_path']}",
+                f"Datei: {file_path.name}",
+                f"Details: {details}",
+            ]
+        )
+    )
+
+    smtp_port = int(settings["smtp_port"] or "587")
+    with smtplib.SMTP(settings["smtp_host"], smtp_port, timeout=30) as server:
+        if settings.get("use_tls", "1") == "1":
+            server.starttls()
+        if settings["smtp_username"].strip():
+            server.login(settings["smtp_username"], settings["smtp_password"])
+        server.send_message(msg)
+
+
 def notify_admin(settings: dict[str, str], recipient_email: str, file_path: Path, error_message: str) -> None:
     admin_email = settings.get("admin_email", "").strip()
     if not admin_email:
@@ -554,6 +621,9 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
     recipient_email = folder_row["recipient_email"]
     folder_path = folder_row["folder_path"]
     filename = file_path.name
+    notify_email = folder_row["notify_email"].strip()
+    notify_on_success = bool(folder_row["notify_on_success"])
+    notify_on_error = bool(folder_row["notify_on_error"])
 
     try:
         min_age_seconds = max(int(settings.get("file_min_age_seconds", "15") or "15"), 0)
@@ -608,13 +678,49 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                 "warning",
                 f"Datei wurde in den Fehler-Ordner verschoben: {destination}",
             )
+            if notify_email and notify_on_error:
+                try:
+                    send_status_notification(
+                        settings,
+                        notify_email,
+                        folder_row,
+                        file_path,
+                        "Fehler",
+                        "; ".join(send_errors),
+                    )
+                except Exception as notification_exc:  # noqa: BLE001
+                    add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
             return
 
         backup_file(settings, recipient_email, file_path)
+        if notify_email and notify_on_success:
+            try:
+                send_status_notification(
+                    settings,
+                    notify_email,
+                    folder_row,
+                    file_path,
+                    "Erfolg",
+                    "Datei wurde erfolgreich an alle Empfaenger versendet.",
+                )
+            except Exception as notification_exc:  # noqa: BLE001
+                add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
         file_path.unlink()
     except Exception as exc:  # noqa: BLE001
         destination = move_to_error_folder(folder_path, file_path)
         add_log(recipient_email, folder_path, filename, "error", f"Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})")
+        if notify_email and notify_on_error:
+            try:
+                send_status_notification(
+                    settings,
+                    notify_email,
+                    folder_row,
+                    file_path,
+                    "Fehler",
+                    str(exc),
+                )
+            except Exception as notification_exc:  # noqa: BLE001
+                add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
 
 
 class FolderMonitor:
@@ -1014,6 +1120,9 @@ def add_folder(
     folder_path: str = Form(...),
     recipient_email: str = Form(...),
     additional_recipients: list[str] | None = Form(None),
+    notify_email: str = Form(""),
+    notify_on_success: str | None = Form(None),
+    notify_on_error: str | None = Form(None),
     display_name: str = Form(...),
 ):
     normalized_path = folder_path.strip()
@@ -1029,7 +1138,15 @@ def add_folder(
             status_code=303,
         )
 
-    insert_watched_folder(normalized_path, recipient_email, additional_recipients, display_name)
+    insert_watched_folder(
+        normalized_path,
+        recipient_email,
+        additional_recipients,
+        notify_email,
+        bool(notify_on_success),
+        bool(notify_on_error),
+        display_name,
+    )
     return RedirectResponse(
         url=f"/settings/folders?message={quote_plus('Ordner wurde erfolgreich angelegt.')}&message_type=success",
         status_code=303,

@@ -56,6 +56,7 @@ Die Einstellungen bleiben erhalten, solange `./data:/app/data` in der Compose-Da
 - Ein SMTP-Testversand kann direkt im Webinterface ausgelöst werden.
 - Ordner für Überwachung und Backup lassen sich grafisch aus dem gemounteten Bereich auswählen.
 - Für Scanner mit langsamer Dateierstellung lassen sich Mindestalter, Anzahl stabiler Prüfungen und die Prüf-Pause einstellen.
+- Pro Ordner kann optional eine eigene Benachrichtigungs-E-Mail für Erfolg und/oder Fehler hinterlegt werden.
 - Bei Versandfehlern wird die Datei in den Unterordner `Fehler` verschoben.
 - Im Reiter `System & Healthcheck` kannst du einstellen, wann `/health` als gesund oder ungesund gelten soll.
 - Wenn du echte Ordner vom Host überwachen willst, muss dieser Pfad zusätzlich per Docker gemountet werden.
