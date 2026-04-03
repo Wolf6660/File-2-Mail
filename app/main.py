@@ -33,6 +33,9 @@ DEFAULT_SETTINGS = {
     "backup_enabled": "0",
     "backup_folder": "",
     "use_tls": "1",
+    "file_min_age_seconds": "15",
+    "file_stable_checks": "3",
+    "file_stable_pause_seconds": "2",
     "health_fail_on_config_error": "0",
     "health_fail_on_recent_errors": "1",
     "health_error_window_minutes": "15",
@@ -405,6 +408,16 @@ def wait_for_stability(file_path: Path, attempts: int = 4, pause_seconds: float 
     return False
 
 
+def file_is_old_enough(file_path: Path, minimum_age_seconds: int) -> bool:
+    if minimum_age_seconds <= 0:
+        return True
+    try:
+        age_seconds = time.time() - file_path.stat().st_mtime
+    except OSError:
+        return False
+    return age_seconds >= minimum_age_seconds
+
+
 def build_message(settings: dict[str, str], recipient_email: str, file_path: Path) -> EmailMessage:
     sender_email = settings["sender_email"].strip() or settings["smtp_username"].strip()
     sender_name = settings["sender_name"].strip()
@@ -542,7 +555,32 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
     folder_path = folder_row["folder_path"]
     filename = file_path.name
 
-    if not wait_for_stability(file_path):
+    try:
+        min_age_seconds = max(int(settings.get("file_min_age_seconds", "15") or "15"), 0)
+    except ValueError:
+        min_age_seconds = 15
+
+    try:
+        stable_checks = max(int(settings.get("file_stable_checks", "3") or "3"), 1)
+    except ValueError:
+        stable_checks = 3
+
+    try:
+        stable_pause_seconds = max(float(settings.get("file_stable_pause_seconds", "2") or "2"), 0.5)
+    except ValueError:
+        stable_pause_seconds = 2.0
+
+    if not file_is_old_enough(file_path, min_age_seconds):
+        add_log(
+            recipient_email,
+            folder_path,
+            filename,
+            "warning",
+            f"Datei ist noch zu neu und wird spaeter erneut geprueft. Mindestalter: {min_age_seconds} Sekunden.",
+        )
+        return
+
+    if not wait_for_stability(file_path, attempts=stable_checks + 1, pause_seconds=stable_pause_seconds):
         add_log(recipient_email, folder_path, filename, "warning", "Datei ist noch nicht stabil und wird später erneut geprüft.")
         return
 
@@ -708,6 +746,7 @@ def dashboard(request: Request, recipient: str = "", status: str = "", search: s
             "status_filter": status,
             "search_filter": search,
             "recipient_colors": colors,
+            "paypal_donate_link": paypal_donate_link(),
         },
     )
 
@@ -723,6 +762,7 @@ def settings_page(request: Request, message: str = "", message_type: str = "info
             "active_tab": "smtp",
             "message": message,
             "message_type": message_type,
+            "paypal_donate_link": paypal_donate_link(),
         },
     )
 
@@ -738,6 +778,7 @@ def folder_settings_page(request: Request, message: str = "", message_type: str 
             "active_tab": "folders",
             "message": message,
             "message_type": message_type,
+            "paypal_donate_link": paypal_donate_link(),
         },
     )
 
@@ -756,6 +797,7 @@ def system_settings_page(request: Request, message: str = "", message_type: str 
             "health_state": health_state,
             "message": message,
             "message_type": message_type,
+            "paypal_donate_link": paypal_donate_link(),
         },
     )
 
@@ -788,12 +830,22 @@ def log_settings_page(
             "recipient_colors": colors,
             "message": message,
             "message_type": message_type,
+            "paypal_donate_link": paypal_donate_link(),
         },
     )
 
 
-@app.post("/settings")
-def save_settings(
+def paypal_donate_link() -> str:
+    return (
+        "https://www.paypal.com/donate"
+        "?business=news%40spider-wolf.de"
+        "&item_name=File-2-Mail+unterstuetzen"
+        "&currency_code=EUR"
+    )
+
+
+@app.post("/settings/smtp")
+def save_smtp_settings(
     smtp_host: str = Form(""),
     smtp_port: str = Form("587"),
     smtp_username: str = Form(""),
@@ -801,9 +853,6 @@ def save_settings(
     sender_email: str = Form(""),
     sender_name: str = Form("File-2-Mail"),
     admin_email: str = Form(""),
-    scan_interval: str = Form("30"),
-    backup_folder: str = Form(""),
-    backup_enabled: str | None = Form(None),
     use_tls: str | None = Form(None),
 ):
     update_settings(
@@ -815,13 +864,38 @@ def save_settings(
             "sender_email": sender_email.strip(),
             "sender_name": sender_name.strip(),
             "admin_email": admin_email.strip(),
-            "scan_interval": scan_interval.strip() or "30",
-            "backup_folder": backup_folder.strip(),
-            "backup_enabled": "1" if backup_enabled else "0",
             "use_tls": "1" if use_tls else "0",
         }
     )
-    return RedirectResponse(url="/settings", status_code=303)
+    return RedirectResponse(
+        url=f"/settings?message={quote_plus('SMTP-Einstellungen wurden gespeichert.')}&message_type=success",
+        status_code=303,
+    )
+
+
+@app.post("/settings/folders")
+def save_folder_settings(
+    scan_interval: str = Form("30"),
+    backup_folder: str = Form(""),
+    backup_enabled: str | None = Form(None),
+    file_min_age_seconds: str = Form("15"),
+    file_stable_checks: str = Form("3"),
+    file_stable_pause_seconds: str = Form("2"),
+):
+    update_settings(
+        {
+            "scan_interval": scan_interval.strip() or "30",
+            "backup_folder": backup_folder.strip(),
+            "backup_enabled": "1" if backup_enabled else "0",
+            "file_min_age_seconds": file_min_age_seconds.strip() or "15",
+            "file_stable_checks": file_stable_checks.strip() or "3",
+            "file_stable_pause_seconds": file_stable_pause_seconds.strip() or "2",
+        }
+    )
+    return RedirectResponse(
+        url=f"/settings/folders?message={quote_plus('Ordner-Einstellungen wurden gespeichert.')}&message_type=success",
+        status_code=303,
+    )
 
 
 @app.post("/settings/system")

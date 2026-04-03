@@ -42,6 +42,13 @@ body {
     margin-bottom: 28px;
 }
 
+.hero-actions {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
 .hero.compact {
     align-items: center;
 }
@@ -245,6 +252,11 @@ select {
 .button.secondary {
     background: rgba(0, 95, 115, 0.1);
     color: var(--accent);
+}
+
+.button.donation {
+    background: #2d6a4f;
+    color: white;
 }
 
 .button.danger {
