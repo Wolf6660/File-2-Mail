@@ -272,6 +272,17 @@ select {
     align-items: center;
 }
 
+.recipient-delete-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.82);
+}
+
 .path-input input,
 .recipient-add input {
     flex: 1;

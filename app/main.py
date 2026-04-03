@@ -276,6 +276,14 @@ def get_log_summary() -> list[sqlite3.Row]:
         )
 
 
+def delete_logs(recipient_email: str = "") -> None:
+    with db_cursor() as connection:
+        if recipient_email:
+            connection.execute("DELETE FROM email_logs WHERE recipient_email = ?", (recipient_email,))
+        else:
+            connection.execute("DELETE FROM email_logs")
+
+
 def count_recent_errors(window_minutes: int) -> int:
     if window_minutes <= 0:
         return 0
@@ -712,7 +720,22 @@ def settings_page(request: Request, message: str = "", message_type: str = "info
         {
             "settings": get_settings(),
             "watched_folders": get_watched_folders(),
-            "active_tab": "mail",
+            "active_tab": "smtp",
+            "message": message,
+            "message_type": message_type,
+        },
+    )
+
+
+@app.get("/settings/folders")
+def folder_settings_page(request: Request, message: str = "", message_type: str = "info"):
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "settings": get_settings(),
+            "watched_folders": get_watched_folders(),
+            "active_tab": "folders",
             "message": message,
             "message_type": message_type,
         },
@@ -731,6 +754,38 @@ def system_settings_page(request: Request, message: str = "", message_type: str 
             "watched_folders": get_watched_folders(),
             "active_tab": "system",
             "health_state": health_state,
+            "message": message,
+            "message_type": message_type,
+        },
+    )
+
+
+@app.get("/settings/logs")
+def log_settings_page(
+    request: Request,
+    recipient: str = "",
+    status: str = "",
+    search: str = "",
+    message: str = "",
+    message_type: str = "info",
+):
+    logs = get_logs(recipient=recipient, status=status, search=search)
+    summary = get_log_summary()
+    recipients = [row["recipient_email"] for row in summary]
+    colors = recipient_colors(recipients)
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "settings": get_settings(),
+            "watched_folders": get_watched_folders(),
+            "active_tab": "logs",
+            "logs": logs,
+            "summary": summary,
+            "recipient_filter": recipient,
+            "status_filter": status,
+            "search_filter": search,
+            "recipient_colors": colors,
             "message": message,
             "message_type": message_type,
         },
@@ -890,19 +945,19 @@ def add_folder(
     normalized_path = folder_path.strip()
     if not normalized_path or not recipient_email.strip() or not display_name.strip():
         return RedirectResponse(
-            url=f"/settings?message={quote_plus('Bitte alle Pflichtfelder ausfuellen.')}&message_type=error",
+            url=f"/settings/folders?message={quote_plus('Bitte alle Pflichtfelder ausfuellen.')}&message_type=error",
             status_code=303,
         )
 
     if folder_exists(normalized_path):
         return RedirectResponse(
-            url=f"/settings?message={quote_plus('Dieser Ordner wird bereits ueberwacht.')}&message_type=error",
+            url=f"/settings/folders?message={quote_plus('Dieser Ordner wird bereits ueberwacht.')}&message_type=error",
             status_code=303,
         )
 
     insert_watched_folder(normalized_path, recipient_email, additional_recipients, display_name)
     return RedirectResponse(
-        url=f"/settings?message={quote_plus('Ordner wurde erfolgreich angelegt.')}&message_type=success",
+        url=f"/settings/folders?message={quote_plus('Ordner wurde erfolgreich angelegt.')}&message_type=success",
         status_code=303,
     )
 
@@ -910,10 +965,24 @@ def add_folder(
 @app.post("/folders/{folder_id}/toggle")
 def toggle_folder(folder_id: int, is_active: str = Form("0")):
     set_folder_active(folder_id, is_active == "1")
-    return RedirectResponse(url="/settings", status_code=303)
+    return RedirectResponse(url="/settings/folders", status_code=303)
 
 
 @app.post("/folders/{folder_id}/delete")
 def remove_folder(folder_id: int):
     delete_folder(folder_id)
-    return RedirectResponse(url="/settings", status_code=303)
+    return RedirectResponse(url="/settings/folders", status_code=303)
+
+
+@app.post("/logs/delete")
+def remove_logs(recipient_email: str = Form("")):
+    delete_logs(recipient_email.strip())
+    if recipient_email.strip():
+        return RedirectResponse(
+            url=f"/settings/logs?message={quote_plus(f'Logs fuer {recipient_email.strip()} wurden geloescht.')}&message_type=success",
+            status_code=303,
+        )
+    return RedirectResponse(
+        url=f"/settings/logs?message={quote_plus('Alle Logs wurden geloescht.')}&message_type=success",
+        status_code=303,
+    )
