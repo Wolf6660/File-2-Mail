@@ -39,5 +39,24 @@ Danach ist das Webinterface unter `http://<server-ip>:8000` erreichbar.
 
 - In der Oberfläche trägst du deine SMTP-Daten, den Absendernamen, Empfänger und das Prüfintervall ein.
 - Über das Webinterface kannst du überwachte Ordner und den Backup-Ordner frei festlegen.
-- Wenn du echte Ordner vom Host überwachen willst, muss dieser Pfad zusätzlich per Docker gemountet werden, zum Beispiel `- /mein/pfad:/storage`.
-- Danach kannst du im Webinterface dann Pfade wie `/storage/scans` oder `/storage/backup` eintragen.
+- Wenn du echte Ordner vom Host überwachen willst, muss dieser Pfad zusätzlich per Docker gemountet werden.
+
+Empfohlen für mehrere frei wählbare Unterordner im Webinterface:
+
+```yaml
+volumes:
+  - ./data:/app/data
+  - /mein/pfad:/storage
+```
+
+Dann kannst du im Webinterface zum Beispiel `/storage/scans` oder `/storage/backup` eintragen.
+
+Direkter Mount für genau einen bestimmten Ordner ist auch möglich:
+
+```yaml
+volumes:
+  - ./data:/app/data
+  - /mein/scanner-ordner:/scanner
+```
+
+Dann trägst du im Webinterface zum Beispiel `/scanner` als überwachten Ordner ein.
