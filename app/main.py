@@ -2,12 +2,14 @@ import os
 import shutil
 import smtplib
 import sqlite3
+import subprocess
 import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 from urllib.parse import quote_plus
 
@@ -82,6 +84,7 @@ def init_db() -> None:
                 notify_email TEXT NOT NULL DEFAULT '',
                 notify_on_success INTEGER NOT NULL DEFAULT 0,
                 notify_on_error INTEGER NOT NULL DEFAULT 1,
+                ocr_enabled INTEGER NOT NULL DEFAULT 0,
                 display_name TEXT NOT NULL DEFAULT '',
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
@@ -117,6 +120,10 @@ def init_db() -> None:
         if "notify_on_error" not in watched_folder_columns:
             connection.execute(
                 "ALTER TABLE watched_folders ADD COLUMN notify_on_error INTEGER NOT NULL DEFAULT 1"
+            )
+        if "ocr_enabled" not in watched_folder_columns:
+            connection.execute(
+                "ALTER TABLE watched_folders ADD COLUMN ocr_enabled INTEGER NOT NULL DEFAULT 0"
             )
 
         existing = {
@@ -161,7 +168,7 @@ def get_watched_folders() -> list[sqlite3.Row]:
             connection.execute(
                 """
                 SELECT id, folder_path, recipient_email, additional_recipients,
-                       notify_email, notify_on_success, notify_on_error,
+                       notify_email, notify_on_success, notify_on_error, ocr_enabled,
                        display_name, is_active, created_at
                 FROM watched_folders
                 ORDER BY is_active DESC, recipient_email ASC, folder_path ASC
@@ -175,7 +182,7 @@ def get_watched_folder(folder_id: int) -> sqlite3.Row | None:
         return connection.execute(
             """
             SELECT id, folder_path, recipient_email, additional_recipients,
-                   notify_email, notify_on_success, notify_on_error,
+                   notify_email, notify_on_success, notify_on_error, ocr_enabled,
                    display_name, is_active, created_at
             FROM watched_folders
             WHERE id = ?
@@ -229,6 +236,7 @@ def insert_watched_folder(
     notify_email: str,
     notify_on_success: bool,
     notify_on_error: bool,
+    ocr_enabled: bool,
     display_name: str,
 ) -> None:
     normalized = str(Path(folder_path).expanduser())
@@ -238,10 +246,10 @@ def insert_watched_folder(
             """
             INSERT INTO watched_folders(
                 folder_path, recipient_email, additional_recipients,
-                notify_email, notify_on_success, notify_on_error,
+                notify_email, notify_on_success, notify_on_error, ocr_enabled,
                 display_name, created_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 normalized,
@@ -250,6 +258,7 @@ def insert_watched_folder(
                 notify_email.strip(),
                 1 if notify_on_success else 0,
                 1 if notify_on_error else 0,
+                1 if ocr_enabled else 0,
                 display_name.strip(),
                 datetime.now().isoformat(),
             ),
@@ -272,6 +281,7 @@ def update_watched_folder(
     notify_email: str,
     notify_on_success: bool,
     notify_on_error: bool,
+    ocr_enabled: bool,
     display_name: str,
 ) -> None:
     normalized = str(Path(folder_path).expanduser())
@@ -286,6 +296,7 @@ def update_watched_folder(
                 notify_email = ?,
                 notify_on_success = ?,
                 notify_on_error = ?,
+                ocr_enabled = ?,
                 display_name = ?
             WHERE id = ?
             """,
@@ -296,6 +307,7 @@ def update_watched_folder(
                 notify_email.strip(),
                 1 if notify_on_success else 0,
                 1 if notify_on_error else 0,
+                1 if ocr_enabled else 0,
                 display_name.strip(),
                 folder_id,
             ),
@@ -418,6 +430,10 @@ def move_to_error_folder(folder_path: str, file_path: Path) -> Path:
     destination = unique_path(error_dir, file_path.name)
     shutil.move(str(file_path), str(destination))
     return destination
+
+
+def ocr_available() -> bool:
+    return shutil.which("ocrmypdf") is not None
 
 
 def browser_roots() -> list[Path]:
@@ -675,7 +691,36 @@ def validate_runtime(settings: dict[str, str], watched_folders: list[sqlite3.Row
     if not watched_folders:
         errors.append("Es ist noch kein überwachter Ordner angelegt.")
 
+    if any(bool(row["ocr_enabled"]) for row in watched_folders) and not ocr_available():
+        errors.append("OCR ist aktiviert, aber 'ocrmypdf' ist im Container nicht verfügbar.")
+
     return errors
+
+
+def apply_ocr(file_path: Path) -> Path:
+    with NamedTemporaryFile(prefix="ocr_", suffix=".pdf", delete=False, dir=str(file_path.parent)) as handle:
+        output_path = Path(handle.name)
+
+    command = [
+        "ocrmypdf",
+        "--skip-text",
+        "--rotate-pages",
+        "--deskew",
+        "--language",
+        "deu+eng",
+        str(file_path),
+        str(output_path),
+    ]
+    result = subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        try:
+            output_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        message = (result.stderr or result.stdout or "Unbekannter OCR-Fehler").strip()
+        raise RuntimeError(message)
+
+    return output_path
 
 
 def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: Path) -> None:
@@ -686,6 +731,7 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
     notify_email = folder_row["notify_email"].strip()
     notify_on_success = bool(folder_row["notify_on_success"])
     notify_on_error = bool(folder_row["notify_on_error"])
+    ocr_enabled = bool(folder_row["ocr_enabled"])
 
     try:
         min_age_seconds = max(int(settings.get("file_min_age_seconds", "15") or "15"), 0)
@@ -717,17 +763,39 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
         return
 
     send_errors: list[str] = []
+    source_file = file_path
     try:
+        if ocr_enabled:
+            try:
+                source_file = apply_ocr(file_path)
+                add_log(recipient_email, folder_path, filename, "success", "OCR wurde erfolgreich ausgeführt.")
+            except Exception as exc:  # noqa: BLE001
+                destination = move_to_error_folder(folder_path, file_path)
+                add_log(recipient_email, folder_path, filename, "error", f"OCR fehlgeschlagen, Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})")
+                if notify_email and notify_on_error:
+                    try:
+                        send_status_notification(
+                            settings,
+                            notify_email,
+                            folder_row,
+                            file_path,
+                            "Fehler",
+                            f"OCR fehlgeschlagen: {exc}",
+                        )
+                    except Exception as notification_exc:  # noqa: BLE001
+                        add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
+                return
+
         for current_recipient in recipients:
             try:
-                send_email(settings, current_recipient, file_path)
+                send_email(settings, current_recipient, source_file)
                 add_log(current_recipient, folder_path, filename, "success", "Datei wurde erfolgreich versendet.")
             except Exception as exc:  # noqa: BLE001
                 error_message = f"Versand fehlgeschlagen: {exc}"
                 send_errors.append(f"{current_recipient}: {exc}")
                 add_log(current_recipient, folder_path, filename, "error", error_message)
                 try:
-                    notify_admin(settings, current_recipient, file_path, error_message)
+                    notify_admin(settings, current_recipient, source_file, error_message)
                 except Exception as admin_exc:  # noqa: BLE001
                     add_log(current_recipient, folder_path, filename, "warning", f"Admin-Hinweis fehlgeschlagen: {admin_exc}")
 
@@ -746,7 +814,7 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                         settings,
                         notify_email,
                         folder_row,
-                        file_path,
+                        source_file,
                         "Fehler",
                         "; ".join(send_errors),
                     )
@@ -754,30 +822,34 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                     add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
             return
 
-        backup_file(settings, recipient_email, file_path)
+        backup_file(settings, recipient_email, source_file)
         if notify_email and notify_on_success:
             try:
                 send_status_notification(
                     settings,
                     notify_email,
                     folder_row,
-                    file_path,
+                    source_file,
                     "Erfolg",
                     "Datei wurde erfolgreich an alle Empfaenger versendet.",
                 )
             except Exception as notification_exc:  # noqa: BLE001
                 add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
         file_path.unlink()
+        if source_file != file_path:
+            source_file.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001
         destination = move_to_error_folder(folder_path, file_path)
         add_log(recipient_email, folder_path, filename, "error", f"Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})")
+        if source_file != file_path:
+            source_file.unlink(missing_ok=True)
         if notify_email and notify_on_error:
             try:
                 send_status_notification(
                     settings,
                     notify_email,
                     folder_row,
-                    file_path,
+                    source_file,
                     "Fehler",
                     str(exc),
                 )
@@ -1187,6 +1259,7 @@ def add_folder(
     notify_email: str = Form(""),
     notify_on_success: str | None = Form(None),
     notify_on_error: str | None = Form(None),
+    ocr_enabled: str | None = Form(None),
     display_name: str = Form(...),
 ):
     normalized_path = folder_path.strip()
@@ -1209,6 +1282,7 @@ def add_folder(
         notify_email,
         bool(notify_on_success),
         bool(notify_on_error),
+        bool(ocr_enabled),
         display_name,
     )
     return RedirectResponse(
@@ -1226,6 +1300,7 @@ def edit_folder(
     notify_email: str = Form(""),
     notify_on_success: str | None = Form(None),
     notify_on_error: str | None = Form(None),
+    ocr_enabled: str | None = Form(None),
     display_name: str = Form(...),
 ):
     normalized_path = folder_path.strip()
@@ -1249,6 +1324,7 @@ def edit_folder(
         notify_email,
         bool(notify_on_success),
         bool(notify_on_error),
+        bool(ocr_enabled),
         display_name,
     )
     return RedirectResponse(
