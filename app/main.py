@@ -17,7 +17,7 @@ from fastapi.templating import Jinja2Templates
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
-DB_PATH = DATA_DIR / "scan2mail.db"
+DB_PATH = DATA_DIR / "file2mail.db"
 
 DEFAULT_SETTINGS = {
     "smtp_host": "",
@@ -25,7 +25,7 @@ DEFAULT_SETTINGS = {
     "smtp_username": "",
     "smtp_password": "",
     "sender_email": "",
-    "sender_name": "Scan-2-Mail",
+    "sender_name": "File-2-Mail",
     "admin_email": "",
     "scan_interval": "30",
     "backup_enabled": "0",
@@ -289,7 +289,7 @@ def notify_admin(settings: dict[str, str], recipient_email: str, file_path: Path
     msg = EmailMessage()
     msg["From"] = from_value
     msg["To"] = admin_email
-    msg["Subject"] = f"Scan-2-Mail Fehler fuer {recipient_email}"
+    msg["Subject"] = f"File-2-Mail Fehler fuer {recipient_email}"
     msg.set_content(
         "\n".join(
             [
@@ -434,7 +434,7 @@ class FolderMonitor:
             process_file(settings, folder_row, file_path)
 
 
-app = FastAPI(title="Scan-2-Mail")
+app = FastAPI(title="File-2-Mail")
 app.mount("/static", StaticFiles(directory=str(BASE_DIR / "static")), name="static")
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 monitor = FolderMonitor()
@@ -509,7 +509,7 @@ def save_settings(
     smtp_username: str = Form(""),
     smtp_password: str = Form(""),
     sender_email: str = Form(""),
-    sender_name: str = Form("Scan-2-Mail"),
+    sender_name: str = Form("File-2-Mail"),
     admin_email: str = Form(""),
     scan_interval: str = Form("30"),
     backup_folder: str = Form(""),

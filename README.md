@@ -1,18 +1,17 @@
-# Scan-2-Mail
+# File-2-Mail
 
-Scan-2-Mail laeuft per Docker auf Raspberry Pi, Synology und anderen Linux-Systemen. Die Einrichtung erfolgt komplett ueber das Webinterface.
+File-2-Mail laeuft per Docker auf Raspberry Pi, Synology und anderen Linux-Systemen. Die Einrichtung erfolgt komplett ueber das Webinterface.
 
 ## Docker Compose
 
 ```yaml
 services:
-  scan2mail:
+  file2mail:
     build: .
     ports:
       - "8000:8000" # Webinterface
     volumes:
       - ./data:/app/data
-      - /pfad/zum/ordner:/storage # frei waehlbarer Host-Ordner
     restart: unless-stopped
 ```
 
@@ -39,5 +38,6 @@ Danach ist das Webinterface unter `http://<server-ip>:8000` erreichbar.
 ## Hinweis
 
 - In der Oberfläche trägst du deine SMTP-Daten, den Absendernamen, Empfänger und das Prüfintervall ein.
-- Den Host-Ordner auf der linken Seite der Compose-Datei wählst du selbst.
-- Im Webinterface kannst du danach die überwachten Ordner und den Backup-Ordner frei festlegen, zum Beispiel `/storage/scans` oder `/storage/mein-backup`.
+- Über das Webinterface kannst du überwachte Ordner und den Backup-Ordner frei festlegen.
+- Wenn du echte Ordner vom Host überwachen willst, muss dieser Pfad zusätzlich per Docker gemountet werden, zum Beispiel `- /mein/pfad:/storage`.
+- Danach kannst du im Webinterface dann Pfade wie `/storage/scans` oder `/storage/backup` eintragen.
