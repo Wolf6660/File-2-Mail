@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan-2-Mail Dashboard</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero">
+            <div>
+                <p class="eyebrow">Scan-2-Mail</p>
+                <h1>Versandstatus auf einen Blick</h1>
+                <p class="lead">Das Dashboard zeigt die letzten Versandereignisse pro Empfänger, farblich getrennt und direkt filterbar.</p>
+            </div>
+            <a class="button ghost" href="/settings">Einstellungen</a>
+        </header>
+
+        <section class="summary-grid">
+            {% for item in summary %}
+            <article class="summary-card" style="--accent: {{ recipient_colors.get(item['recipient_email'], '#457b9d') }}">
+                <h2>{{ item["recipient_email"] }}</h2>
+                <p>{{ item["total_count"] or 0 }} Einträge</p>
+                <div class="summary-stats">
+                    <span>OK: {{ item["success_count"] or 0 }}</span>
+                    <span>Fehler: {{ item["error_count"] or 0 }}</span>
+                </div>
+            </article>
+            {% endfor %}
+            {% if not summary %}
+            <article class="summary-card empty">
+                <h2>Noch keine Logs</h2>
+                <p>Sobald Dateien verarbeitet werden, erscheinen die Empfänger hier automatisch.</p>
+            </article>
+            {% endif %}
+        </section>
+
+        <section class="panel">
+            <form class="filters" method="get" action="/">
+                <label>
+                    <span>Empfänger</span>
+                    <select name="recipient">
+                        <option value="">Alle</option>
+                        {% for item in summary %}
+                        <option value="{{ item['recipient_email'] }}" {% if recipient_filter == item['recipient_email'] %}selected{% endif %}>{{ item["recipient_email"] }}</option>
+                        {% endfor %}
+                    </select>
+                </label>
+                <label>
+                    <span>Status</span>
+                    <select name="status">
+                        <option value="">Alle</option>
+                        <option value="success" {% if status_filter == 'success' %}selected{% endif %}>Erfolg</option>
+                        <option value="warning" {% if status_filter == 'warning' %}selected{% endif %}>Warnung</option>
+                        <option value="error" {% if status_filter == 'error' %}selected{% endif %}>Fehler</option>
+                    </select>
+                </label>
+                <label class="search">
+                    <span>Suche</span>
+                    <input type="text" name="search" placeholder="Dateiname, Ordner oder Meldung" value="{{ search_filter }}">
+                </label>
+                <button class="button" type="submit">Filtern</button>
+            </form>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Aktuelle Ordner</h2>
+                <p>{{ watched_folders|length }} Konfigurationen aktiv oder vorbereitet</p>
+            </div>
+            <div class="folder-list">
+                {% for folder in watched_folders %}
+                <div class="folder-pill">
+                    <strong>{{ folder["display_name"] or folder["recipient_email"] }}</strong>
+                    <span>{{ folder["folder_path"] }}</span>
+                    <em>{{ "Aktiv" if folder["is_active"] else "Pausiert" }}</em>
+                </div>
+                {% endfor %}
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Versandprotokoll</h2>
+                <p>Jeder Empfänger hat eine eigene Farbcodierung.</p>
+            </div>
+
+            <div class="log-table">
+                <div class="log-row log-head">
+                    <span>Zeit</span>
+                    <span>Empfänger</span>
+                    <span>Datei</span>
+                    <span>Ordner</span>
+                    <span>Status</span>
+                    <span>Meldung</span>
+                </div>
+                {% for log in logs %}
+                <div class="log-row" style="--accent: {{ recipient_colors.get(log['recipient_email'], '#8d99ae') }}">
+                    <span>{{ log["created_at"].replace('T', ' ') }}</span>
+                    <span>{{ log["recipient_email"] }}</span>
+                    <span>{{ log["filename"] }}</span>
+                    <span>{{ log["folder_path"] }}</span>
+                    <span><strong class="status {{ log['status'] }}">{{ log["status"] }}</strong></span>
+                    <span>{{ log["message"] }}</span>
+                </div>
+                {% endfor %}
+                {% if not logs %}
+                <div class="log-empty">
+                    Noch keine passenden Logeinträge gefunden.
+                </div>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+</body>
+</html>

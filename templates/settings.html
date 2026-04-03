@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scan-2-Mail Einstellungen</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="page-shell">
+        <header class="hero compact">
+            <div>
+                <p class="eyebrow">Einstellungen</p>
+                <h1>Versand, Intervalle und Ordner verwalten</h1>
+                <p class="lead">Hier werden SMTP-Zugang, Absendername, Backup und die überwachten Ordner gepflegt.</p>
+            </div>
+            <a class="button ghost" href="/">Zurück zum Dashboard</a>
+        </header>
+
+        <section class="settings-grid">
+            <form class="panel form-panel" method="post" action="/settings">
+                <div class="panel-header">
+                    <h2>SMTP und Versand</h2>
+                </div>
+                <div class="form-grid">
+                    <label>
+                        <span>SMTP-Host</span>
+                        <input type="text" name="smtp_host" value="{{ settings['smtp_host'] }}" required>
+                    </label>
+                    <label>
+                        <span>SMTP-Port</span>
+                        <input type="number" name="smtp_port" value="{{ settings['smtp_port'] }}" min="1" required>
+                    </label>
+                    <label>
+                        <span>SMTP-Benutzername</span>
+                        <input type="text" name="smtp_username" value="{{ settings['smtp_username'] }}">
+                    </label>
+                    <label>
+                        <span>SMTP-Passwort</span>
+                        <input type="password" name="smtp_password" value="{{ settings['smtp_password'] }}">
+                    </label>
+                    <label>
+                        <span>Absender-E-Mail</span>
+                        <input type="email" name="sender_email" value="{{ settings['sender_email'] }}" required>
+                    </label>
+                    <label>
+                        <span>Absendername</span>
+                        <input type="text" name="sender_name" value="{{ settings['sender_name'] }}">
+                    </label>
+                    <label>
+                        <span>Admin-E-Mail für Hinweise</span>
+                        <input type="email" name="admin_email" value="{{ settings['admin_email'] }}">
+                    </label>
+                    <label>
+                        <span>Prüfintervall in Sekunden</span>
+                        <input type="number" name="scan_interval" value="{{ settings['scan_interval'] }}" min="5" required>
+                    </label>
+                    <label class="checkbox">
+                        <input type="checkbox" name="use_tls" value="1" {% if settings['use_tls'] == '1' %}checked{% endif %}>
+                        <span>TLS für SMTP verwenden</span>
+                    </label>
+                    <label class="checkbox">
+                        <input type="checkbox" name="backup_enabled" value="1" {% if settings['backup_enabled'] == '1' %}checked{% endif %}>
+                        <span>Backup aktivieren</span>
+                    </label>
+                    <label class="full">
+                        <span>Backup-Ordner</span>
+                        <input type="text" name="backup_folder" value="{{ settings['backup_folder'] }}" placeholder="/data/backup">
+                    </label>
+                </div>
+                <button class="button" type="submit">Einstellungen speichern</button>
+            </form>
+
+            <div class="panel form-panel">
+                <div class="panel-header">
+                    <h2>Ordner hinzufügen</h2>
+                </div>
+                <form method="post" action="/folders" class="stack">
+                    <label>
+                        <span>Ordnerpfad</span>
+                        <input type="text" name="folder_path" placeholder="/data/watch/rechnungen" required>
+                    </label>
+                    <label>
+                        <span>Empfängeradresse</span>
+                        <input type="email" name="recipient_email" placeholder="belege@example.de" required>
+                    </label>
+                    <label>
+                        <span>Anzeigename</span>
+                        <input type="text" name="display_name" placeholder="Rechnungen Eingang">
+                    </label>
+                    <button class="button" type="submit">Ordner speichern</button>
+                </form>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Überwachte Ordner</h2>
+                <p>Pro Ordner ist ein eigener Empfänger hinterlegt.</p>
+            </div>
+            <div class="table-like">
+                <div class="table-row table-head">
+                    <span>Name</span>
+                    <span>Ordnerpfad</span>
+                    <span>Empfänger</span>
+                    <span>Status</span>
+                    <span>Aktionen</span>
+                </div>
+                {% for folder in watched_folders %}
+                <div class="table-row">
+                    <span>{{ folder["display_name"] or "-" }}</span>
+                    <span>{{ folder["folder_path"] }}</span>
+                    <span>{{ folder["recipient_email"] }}</span>
+                    <span>{{ "Aktiv" if folder["is_active"] else "Pausiert" }}</span>
+                    <span class="actions">
+                        <form method="post" action="/folders/{{ folder['id'] }}/toggle">
+                            <input type="hidden" name="is_active" value="{{ 0 if folder['is_active'] else 1 }}">
+                            <button class="button small secondary" type="submit">{{ "Pausieren" if folder["is_active"] else "Aktivieren" }}</button>
+                        </form>
+                        <form method="post" action="/folders/{{ folder['id'] }}/delete">
+                            <button class="button small danger" type="submit">Löschen</button>
+                        </form>
+                    </span>
+                </div>
+                {% endfor %}
+                {% if not watched_folders %}
+                <div class="table-empty">Noch keine überwachten Ordner angelegt.</div>
+                {% endif %}
+            </div>
+        </section>
+    </div>
+</body>
+</html>
