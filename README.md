@@ -16,7 +16,19 @@ services:
     restart: unless-stopped
 ```
 
+`8000:8000` bedeutet:
+
+- Links `8000` = externer Port auf deinem Server
+- Rechts `8000` = interner Port im Container
+
 ## Start
+
+Projekt auf den Server holen:
+
+```bash
+git clone git@github.com:Wolf6660/File-2-Mail.git
+cd File-2-Mail
+```
 
 ```bash
 docker compose up -d --build
