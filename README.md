@@ -2,6 +2,23 @@
 
 File-2-Mail laeuft per Docker auf Raspberry Pi, Synology und anderen Linux-Systemen. Die Einrichtung erfolgt komplett ueber das Webinterface.
 
+## Funktionen
+
+- Webinterface mit den Bereichen `SMTP Versand`, `Ordner`, `System & Healthcheck` und `Logs`
+- SMTP-Einstellungen mit Testversand
+- Mehrere überwachte Ordner mit eigenem Anzeigenamen
+- Pro Ordner eine Haupt-Empfängeradresse und optionale weitere Empfänger
+- Grafische Ordnerauswahl aus dem gemounteten Docker-Bereich
+- Backup-Funktion für versendete Dateien
+- Scanner-Schutz durch Mindestalter, Stabilitätsprüfungen und Prüfpausen
+- OCR pro Ordner einzeln aktivierbar
+- Pro Ordner optionale Benachrichtigungs-E-Mail für Erfolg und/oder Fehler
+- Fehlerhafte Dateien werden in den Unterordner `Fehler` verschoben
+- Dashboard mit farbigen Logs pro Empfänger und Filterung
+- Logs können komplett oder pro Empfänger gelöscht werden
+- Docker-Healthcheck mit konfigurierbaren Regeln im Webinterface
+- Spendenbutton im Webinterface und auf GitHub
+
 ## Docker Compose
 
 ```yaml
@@ -20,6 +37,8 @@ services:
 
 - Links `8000` = externer Port auf deinem Server
 - Rechts `8000` = interner Port im Container
+
+OCR ist bereits im gleichen Container integriert. Es wird kein zusätzlicher OCR-Container benötigt.
 
 ## Start
 
@@ -51,16 +70,11 @@ Die Einstellungen bleiben erhalten, solange `./data:/app/data` in der Compose-Da
 
 ## Hinweis
 
-- In der Oberfläche trägst du deine SMTP-Daten, den Absendernamen, Empfänger und das Prüfintervall ein.
-- Über das Webinterface kannst du überwachte Ordner und den Backup-Ordner frei festlegen.
-- Ein SMTP-Testversand kann direkt im Webinterface ausgelöst werden.
-- Ordner für Überwachung und Backup lassen sich grafisch aus dem gemounteten Bereich auswählen.
-- Für Scanner mit langsamer Dateierstellung lassen sich Mindestalter, Anzahl stabiler Prüfungen und die Prüf-Pause einstellen.
-- OCR kann pro Ordner einzeln aktiviert werden.
-- Pro Ordner kann optional eine eigene Benachrichtigungs-E-Mail für Erfolg und/oder Fehler hinterlegt werden.
-- Bei Versandfehlern wird die Datei in den Unterordner `Fehler` verschoben.
-- Im Reiter `System & Healthcheck` kannst du einstellen, wann `/health` als gesund oder ungesund gelten soll.
-- Wenn du echte Ordner vom Host überwachen willst, muss dieser Pfad zusätzlich per Docker gemountet werden.
+- In `SMTP Versand` pflegst du SMTP-Zugang, Absender und Testversand.
+- In `Ordner` legst du überwachte Ordner an, bearbeitest sie, aktivierst OCR und konfigurierst Benachrichtigungen pro Ordner.
+- In `System & Healthcheck` steuerst du, wann `/health` als gesund oder ungesund gelten soll.
+- In `Logs` filterst und löschst du Protokolle komplett oder pro Empfänger.
+- Wenn du echte Ordner vom Host überwachen willst, muss dieser Pfad per Docker gemountet werden.
 
 Empfohlen für mehrere frei wählbare Unterordner im Webinterface:
 
