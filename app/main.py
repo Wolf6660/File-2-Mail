@@ -170,6 +170,20 @@ def get_watched_folders() -> list[sqlite3.Row]:
         )
 
 
+def get_watched_folder(folder_id: int) -> sqlite3.Row | None:
+    with db_cursor() as connection:
+        return connection.execute(
+            """
+            SELECT id, folder_path, recipient_email, additional_recipients,
+                   notify_email, notify_on_success, notify_on_error,
+                   display_name, is_active, created_at
+            FROM watched_folders
+            WHERE id = ?
+            """,
+            (folder_id,),
+        ).fetchone()
+
+
 def normalize_recipient_list(primary_recipient: str, additional_recipients: list[str] | None = None) -> tuple[str, str]:
     candidates = [primary_recipient.strip()]
     if additional_recipients:
@@ -194,6 +208,16 @@ def folder_exists(folder_path: str) -> bool:
         row = connection.execute(
             "SELECT 1 FROM watched_folders WHERE folder_path = ?",
             (normalized,),
+        ).fetchone()
+    return row is not None
+
+
+def folder_exists_for_other(folder_path: str, folder_id: int) -> bool:
+    normalized = str(Path(folder_path).expanduser())
+    with db_cursor() as connection:
+        row = connection.execute(
+            "SELECT 1 FROM watched_folders WHERE folder_path = ? AND id != ?",
+            (normalized, folder_id),
         ).fetchone()
     return row is not None
 
@@ -237,6 +261,44 @@ def set_folder_active(folder_id: int, is_active: bool) -> None:
         connection.execute(
             "UPDATE watched_folders SET is_active = ? WHERE id = ?",
             (1 if is_active else 0, folder_id),
+        )
+
+
+def update_watched_folder(
+    folder_id: int,
+    folder_path: str,
+    recipient_email: str,
+    additional_recipients: list[str] | None,
+    notify_email: str,
+    notify_on_success: bool,
+    notify_on_error: bool,
+    display_name: str,
+) -> None:
+    normalized = str(Path(folder_path).expanduser())
+    primary_recipient, extra_recipients = normalize_recipient_list(recipient_email, additional_recipients)
+    with db_cursor() as connection:
+        connection.execute(
+            """
+            UPDATE watched_folders
+            SET folder_path = ?,
+                recipient_email = ?,
+                additional_recipients = ?,
+                notify_email = ?,
+                notify_on_success = ?,
+                notify_on_error = ?,
+                display_name = ?
+            WHERE id = ?
+            """,
+            (
+                normalized,
+                primary_recipient,
+                extra_recipients,
+                notify_email.strip(),
+                1 if notify_on_success else 0,
+                1 if notify_on_error else 0,
+                display_name.strip(),
+                folder_id,
+            ),
         )
 
 
@@ -874,7 +936,8 @@ def settings_page(request: Request, message: str = "", message_type: str = "info
 
 
 @app.get("/settings/folders")
-def folder_settings_page(request: Request, message: str = "", message_type: str = "info"):
+def folder_settings_page(request: Request, message: str = "", message_type: str = "info", edit_folder_id: int = 0):
+    edit_folder = get_watched_folder(edit_folder_id) if edit_folder_id else None
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -885,6 +948,7 @@ def folder_settings_page(request: Request, message: str = "", message_type: str 
             "message": message,
             "message_type": message_type,
             "paypal_donate_link": paypal_donate_link(),
+            "edit_folder": edit_folder,
         },
     )
 
@@ -1149,6 +1213,46 @@ def add_folder(
     )
     return RedirectResponse(
         url=f"/settings/folders?message={quote_plus('Ordner wurde erfolgreich angelegt.')}&message_type=success",
+        status_code=303,
+    )
+
+
+@app.post("/folders/{folder_id}/edit")
+def edit_folder(
+    folder_id: int,
+    folder_path: str = Form(...),
+    recipient_email: str = Form(...),
+    additional_recipients: list[str] | None = Form(None),
+    notify_email: str = Form(""),
+    notify_on_success: str | None = Form(None),
+    notify_on_error: str | None = Form(None),
+    display_name: str = Form(...),
+):
+    normalized_path = folder_path.strip()
+    if not normalized_path or not recipient_email.strip() or not display_name.strip():
+        return RedirectResponse(
+            url=f"/settings/folders?edit_folder_id={folder_id}&message={quote_plus('Bitte alle Pflichtfelder ausfuellen.')}&message_type=error",
+            status_code=303,
+        )
+
+    if folder_exists_for_other(normalized_path, folder_id):
+        return RedirectResponse(
+            url=f"/settings/folders?edit_folder_id={folder_id}&message={quote_plus('Dieser Ordner wird bereits ueberwacht.')}&message_type=error",
+            status_code=303,
+        )
+
+    update_watched_folder(
+        folder_id,
+        normalized_path,
+        recipient_email,
+        additional_recipients,
+        notify_email,
+        bool(notify_on_success),
+        bool(notify_on_error),
+        display_name,
+    )
+    return RedirectResponse(
+        url=f"/settings/folders?message={quote_plus('Ordner wurde erfolgreich aktualisiert.')}&message_type=success",
         status_code=303,
     )
 

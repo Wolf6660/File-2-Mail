@@ -131,46 +131,62 @@
 
             <div class="panel form-panel">
                 <div class="panel-header">
-                    <h2>Ordner hinzufügen</h2>
+                    <h2>{% if edit_folder %}Ordner bearbeiten{% else %}Ordner hinzufügen{% endif %}</h2>
                 </div>
-                <form method="post" action="/folders" class="stack">
+                <form method="post" action="{% if edit_folder %}/folders/{{ edit_folder['id'] }}/edit{% else %}/folders{% endif %}" class="stack">
                     <label>
                         <span>Ordnerpfad</span>
                         <div class="path-input">
-                            <input id="watch-folder-input" type="text" name="folder_path" placeholder="/storage/scans/rechnungen" required>
+                            <input id="watch-folder-input" type="text" name="folder_path" placeholder="/storage/scans/rechnungen" value="{{ edit_folder['folder_path'] if edit_folder else '' }}" required>
                             <button class="button secondary small browse-trigger" type="button" data-target="watch-folder-input">Auswählen</button>
                         </div>
                     </label>
                     <label>
                         <span>Empfängeradresse</span>
-                        <input type="email" name="recipient_email" placeholder="belege@example.de" required>
+                        <input type="email" name="recipient_email" placeholder="belege@example.de" value="{{ edit_folder['recipient_email'] if edit_folder else '' }}" required>
                     </label>
                     <div class="stack" id="additional-recipients">
                         <label>
                             <span>Weitere Empfänger optional</span>
                             <div class="recipient-add">
-                                <input type="email" name="additional_recipients" placeholder="weitere@example.de">
+                                <input type="email" name="additional_recipients" placeholder="weitere@example.de" value="{{ edit_folder['additional_recipients'].split(',')[0] if edit_folder and edit_folder['additional_recipients'] else '' }}">
                                 <button class="button plus" type="button" id="add-recipient">+</button>
                             </div>
                         </label>
+                        {% if edit_folder and edit_folder['additional_recipients'] %}
+                            {% for recipient in edit_folder['additional_recipients'].split(',')[1:] %}
+                            <label>
+                                <span>Weiterer Empfänger</span>
+                                <div class="recipient-add">
+                                    <input type="email" name="additional_recipients" placeholder="weitere@example.de" value="{{ recipient.strip() }}">
+                                    <button class="button danger small remove-recipient" type="button">-</button>
+                                </div>
+                            </label>
+                            {% endfor %}
+                        {% endif %}
                     </div>
                     <label>
                         <span>Anzeigename</span>
-                        <input type="text" name="display_name" placeholder="Rechnungen Eingang" required>
+                        <input type="text" name="display_name" placeholder="Rechnungen Eingang" value="{{ edit_folder['display_name'] if edit_folder else '' }}" required>
                     </label>
                     <label>
                         <span>Benachrichtigungs-E-Mail optional</span>
-                        <input type="email" name="notify_email" placeholder="status@example.de">
+                        <input type="email" name="notify_email" placeholder="status@example.de" value="{{ edit_folder['notify_email'] if edit_folder else '' }}">
                     </label>
                     <label class="checkbox">
-                        <input type="checkbox" name="notify_on_success" value="1">
+                        <input type="checkbox" name="notify_on_success" value="1" {% if edit_folder and edit_folder['notify_on_success'] %}checked{% endif %}>
                         <span>Bei erfolgreichem Versand benachrichtigen</span>
                     </label>
                     <label class="checkbox">
-                        <input type="checkbox" name="notify_on_error" value="1" checked>
+                        <input type="checkbox" name="notify_on_error" value="1" {% if not edit_folder or edit_folder['notify_on_error'] %}checked{% endif %}>
                         <span>Bei Fehler benachrichtigen</span>
                     </label>
-                    <button class="button" type="submit">Ordner speichern</button>
+                    <div class="actions">
+                        <button class="button" type="submit">{% if edit_folder %}Änderungen speichern{% else %}Ordner speichern{% endif %}</button>
+                        {% if edit_folder %}
+                        <a class="button secondary" href="/settings/folders">Abbrechen</a>
+                        {% endif %}
+                    </div>
                 </form>
             </div>
         </section>
@@ -195,6 +211,7 @@
                     <span>{{ folder["recipient_email"] }}{% if folder["additional_recipients"] %}, {{ folder["additional_recipients"] }}{% endif %}</span>
                     <span>{{ "Aktiv" if folder["is_active"] else "Pausiert" }}</span>
                     <span class="actions">
+                        <a class="button small secondary" href="/settings/folders?edit_folder_id={{ folder['id'] }}">Bearbeiten</a>
                         <form method="post" action="/folders/{{ folder['id'] }}/toggle">
                             <input type="hidden" name="is_active" value="{{ 0 if folder['is_active'] else 1 }}">
                             <button class="button small secondary" type="submit">{{ "Pausieren" if folder["is_active"] else "Aktivieren" }}</button>
@@ -467,6 +484,10 @@
                 wrapper.querySelector(".remove-recipient").addEventListener("click", () => wrapper.remove());
             });
         }
+
+        document.querySelectorAll(".remove-recipient").forEach((button) => {
+            button.addEventListener("click", () => button.closest("label").remove());
+        });
 
         document.querySelectorAll(".info-badge").forEach((button) => {
             button.addEventListener("click", () => {
