@@ -31,7 +31,7 @@ cd File-2-Mail
 ```
 
 ```bash
-docker compose up -d --build
+sudo docker compose up -d --build
 ```
 
 Danach ist das Webinterface unter `http://<server-ip>:8000` erreichbar.
@@ -40,7 +40,7 @@ Danach ist das Webinterface unter `http://<server-ip>:8000` erreichbar.
 
 ```bash
 git pull
-docker compose up -d --build
+sudo docker compose up -d --build
 ```
 
 Die Einstellungen bleiben erhalten, solange `./data:/app/data` in der Compose-Datei eingebunden bleibt. Dort werden die Konfiguration und die Datenbank gespeichert.
