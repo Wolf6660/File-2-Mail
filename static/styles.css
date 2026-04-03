@@ -99,6 +99,24 @@ h1, h2 {
     border-color: var(--accent);
 }
 
+.alert {
+    padding: 14px 18px;
+    border-radius: 18px;
+    margin-bottom: 24px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.88);
+}
+
+.alert.success {
+    color: var(--success);
+    border-color: rgba(45, 106, 79, 0.25);
+}
+
+.alert.error {
+    color: var(--error);
+    border-color: rgba(193, 18, 31, 0.25);
+}
+
 .panel,
 .summary-card {
     background: var(--panel);
@@ -239,6 +257,26 @@ select {
     font-size: 0.9rem;
 }
 
+.button.plus {
+    background: #2d6a4f;
+    min-width: 42px;
+    padding-inline: 0;
+}
+
+.path-input,
+.recipient-add,
+.browser-toolbar,
+.browser-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.path-input input,
+.recipient-add input {
+    flex: 1;
+}
+
 .folder-list,
 .table-like,
 .log-table {
@@ -310,6 +348,46 @@ select {
     background: rgba(255, 255, 255, 0.54);
     color: var(--muted);
     border: 1px dashed var(--border);
+}
+
+.browser-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(31, 41, 51, 0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.browser-modal.hidden {
+    display: none;
+}
+
+.browser-dialog {
+    width: min(760px, 100%);
+    max-height: 80vh;
+    overflow: auto;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    box-shadow: var(--shadow);
+    padding: 24px;
+}
+
+.browser-list {
+    display: grid;
+    gap: 10px;
+    margin-top: 18px;
+}
+
+.browser-entry {
+    text-align: left;
+    padding: 12px 14px;
+    border-radius: 14px;
+    border: 1px solid var(--border);
+    background: rgba(255, 255, 255, 0.9);
+    cursor: pointer;
 }
 
 @media (max-width: 960px) {

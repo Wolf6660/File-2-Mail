@@ -22,6 +22,12 @@
             <a class="tab {% if active_tab == 'system' %}active{% endif %}" href="/settings/system">System & Healthcheck</a>
         </nav>
 
+        {% if message %}
+        <div class="alert {{ message_type }}">
+            {{ message }}
+        </div>
+        {% endif %}
+
         {% if active_tab == 'mail' %}
         <section class="settings-grid">
             <form class="panel form-panel" method="post" action="/settings">
@@ -71,7 +77,10 @@
                     </label>
                     <label class="full">
                         <span>Backup-Ordner</span>
-                        <input type="text" name="backup_folder" value="{{ settings['backup_folder'] }}" placeholder="/storage/backup">
+                        <div class="path-input">
+                            <input id="backup-folder-input" type="text" name="backup_folder" value="{{ settings['backup_folder'] }}" placeholder="/storage/backup">
+                            <button class="button secondary small browse-trigger" type="button" data-target="backup-folder-input">Auswählen</button>
+                        </div>
                     </label>
                 </div>
                 <button class="button" type="submit">Einstellungen speichern</button>
@@ -84,17 +93,42 @@
                 <form method="post" action="/folders" class="stack">
                     <label>
                         <span>Ordnerpfad</span>
-                        <input type="text" name="folder_path" placeholder="/storage/scans/rechnungen" required>
+                        <div class="path-input">
+                            <input id="watch-folder-input" type="text" name="folder_path" placeholder="/storage/scans/rechnungen" required>
+                            <button class="button secondary small browse-trigger" type="button" data-target="watch-folder-input">Auswählen</button>
+                        </div>
                     </label>
                     <label>
                         <span>Empfängeradresse</span>
                         <input type="email" name="recipient_email" placeholder="belege@example.de" required>
                     </label>
+                    <div class="stack" id="additional-recipients">
+                        <label>
+                            <span>Weitere Empfänger optional</span>
+                            <div class="recipient-add">
+                                <input type="email" name="additional_recipients" placeholder="weitere@example.de">
+                                <button class="button plus" type="button" id="add-recipient">+</button>
+                            </div>
+                        </label>
+                    </div>
                     <label>
                         <span>Anzeigename</span>
-                        <input type="text" name="display_name" placeholder="Rechnungen Eingang">
+                        <input type="text" name="display_name" placeholder="Rechnungen Eingang" required>
                     </label>
                     <button class="button" type="submit">Ordner speichern</button>
+                </form>
+            </div>
+
+            <div class="panel form-panel">
+                <div class="panel-header">
+                    <h2>SMTP-Test</h2>
+                </div>
+                <form method="post" action="/settings/test-smtp" class="stack">
+                    <label>
+                        <span>Test-E-Mail-Adresse</span>
+                        <input type="email" name="test_recipient" placeholder="test@example.de">
+                    </label>
+                    <button class="button" type="submit">Testversand starten</button>
                 </form>
             </div>
         </section>
@@ -190,7 +224,7 @@
                 <div class="table-row">
                     <span>{{ folder["display_name"] or "-" }}</span>
                     <span>{{ folder["folder_path"] }}</span>
-                    <span>{{ folder["recipient_email"] }}</span>
+                    <span>{{ folder["recipient_email"] }}{% if folder["additional_recipients"] %}, {{ folder["additional_recipients"] }}{% endif %}</span>
                     <span>{{ "Aktiv" if folder["is_active"] else "Pausiert" }}</span>
                     <span class="actions">
                         <form method="post" action="/folders/{{ folder['id'] }}/toggle">
@@ -210,5 +244,92 @@
         </section>
         {% endif %}
     </div>
+    <div class="browser-modal hidden" id="browser-modal">
+        <div class="browser-dialog">
+            <div class="panel-header">
+                <h2>Ordner auswählen</h2>
+                <button class="button secondary small" type="button" id="close-browser">Schließen</button>
+            </div>
+            <div class="browser-toolbar">
+                <button class="button secondary small" type="button" id="browser-up">Eine Ebene höher</button>
+                <span id="browser-current-path">Start</span>
+            </div>
+            <div class="browser-list" id="browser-list"></div>
+            <div class="browser-actions">
+                <button class="button" type="button" id="browser-confirm">Diesen Ordner übernehmen</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        const browserModal = document.getElementById("browser-modal");
+        const browserList = document.getElementById("browser-list");
+        const browserCurrentPath = document.getElementById("browser-current-path");
+        const browserConfirm = document.getElementById("browser-confirm");
+        const browserUp = document.getElementById("browser-up");
+        const closeBrowser = document.getElementById("close-browser");
+        const addRecipient = document.getElementById("add-recipient");
+        const additionalRecipients = document.getElementById("additional-recipients");
+
+        let browserTargetInput = null;
+        let selectedPath = "";
+        let parentPath = "";
+
+        async function loadBrowser(path = "") {
+            const query = path ? `?path=${encodeURIComponent(path)}` : "";
+            const response = await fetch(`/api/browse${query}`);
+            const data = await response.json();
+            selectedPath = data.current_path || "";
+            parentPath = data.parent_path || "";
+            browserCurrentPath.textContent = selectedPath || "Verfügbare Mounts";
+            browserList.innerHTML = "";
+
+            data.entries.forEach((entry) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "browser-entry";
+                button.textContent = entry.name;
+                button.addEventListener("click", () => loadBrowser(entry.path));
+                browserList.appendChild(button);
+            });
+        }
+
+        document.querySelectorAll(".browse-trigger").forEach((button) => {
+            button.addEventListener("click", async () => {
+                browserTargetInput = document.getElementById(button.dataset.target);
+                browserModal.classList.remove("hidden");
+                await loadBrowser(browserTargetInput.value || "");
+            });
+        });
+
+        browserConfirm.addEventListener("click", () => {
+            if (browserTargetInput && selectedPath) {
+                browserTargetInput.value = selectedPath;
+            }
+            browserModal.classList.add("hidden");
+        });
+
+        browserUp.addEventListener("click", async () => {
+            await loadBrowser(parentPath);
+        });
+
+        closeBrowser.addEventListener("click", () => {
+            browserModal.classList.add("hidden");
+        });
+
+        if (addRecipient) {
+            addRecipient.addEventListener("click", () => {
+                const wrapper = document.createElement("label");
+                wrapper.innerHTML = `
+                    <span>Weiterer Empfänger</span>
+                    <div class="recipient-add">
+                        <input type="email" name="additional_recipients" placeholder="weitere@example.de">
+                        <button class="button danger small remove-recipient" type="button">-</button>
+                    </div>
+                `;
+                additionalRecipients.appendChild(wrapper);
+                wrapper.querySelector(".remove-recipient").addEventListener("click", () => wrapper.remove());
+            });
+        }
+    </script>
 </body>
 </html>

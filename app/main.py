@@ -1,3 +1,4 @@
+import os
 import shutil
 import smtplib
 import sqlite3
@@ -8,9 +9,10 @@ from datetime import datetime
 from email.message import EmailMessage
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote_plus
 
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
@@ -73,6 +75,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 folder_path TEXT NOT NULL,
                 recipient_email TEXT NOT NULL,
+                additional_recipients TEXT NOT NULL DEFAULT '',
                 display_name TEXT NOT NULL DEFAULT '',
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
@@ -89,6 +92,14 @@ def init_db() -> None:
             );
             """
         )
+
+        watched_folder_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(watched_folders)")
+        }
+        if "additional_recipients" not in watched_folder_columns:
+            connection.execute(
+                "ALTER TABLE watched_folders ADD COLUMN additional_recipients TEXT NOT NULL DEFAULT ''"
+            )
 
         existing = {
             row["key"]: row["value"]
@@ -131,7 +142,7 @@ def get_watched_folders() -> list[sqlite3.Row]:
         return list(
             connection.execute(
                 """
-                SELECT id, folder_path, recipient_email, display_name, is_active, created_at
+                SELECT id, folder_path, recipient_email, additional_recipients, display_name, is_active, created_at
                 FROM watched_folders
                 ORDER BY is_active DESC, recipient_email ASC, folder_path ASC
                 """
@@ -139,15 +150,55 @@ def get_watched_folders() -> list[sqlite3.Row]:
         )
 
 
-def insert_watched_folder(folder_path: str, recipient_email: str, display_name: str) -> None:
+def normalize_recipient_list(primary_recipient: str, additional_recipients: list[str] | None = None) -> tuple[str, str]:
+    candidates = [primary_recipient.strip()]
+    if additional_recipients:
+        candidates.extend(item.strip() for item in additional_recipients if item and item.strip())
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for entry in candidates:
+        lowered = entry.lower()
+        if entry and lowered not in seen:
+            unique.append(entry)
+            seen.add(lowered)
+
+    primary = unique[0] if unique else ""
+    extras = ",".join(unique[1:]) if len(unique) > 1 else ""
+    return primary, extras
+
+
+def folder_exists(folder_path: str) -> bool:
     normalized = str(Path(folder_path).expanduser())
+    with db_cursor() as connection:
+        row = connection.execute(
+            "SELECT 1 FROM watched_folders WHERE folder_path = ?",
+            (normalized,),
+        ).fetchone()
+    return row is not None
+
+
+def insert_watched_folder(
+    folder_path: str,
+    recipient_email: str,
+    additional_recipients: list[str] | None,
+    display_name: str,
+) -> None:
+    normalized = str(Path(folder_path).expanduser())
+    primary_recipient, extra_recipients = normalize_recipient_list(recipient_email, additional_recipients)
     with db_cursor() as connection:
         connection.execute(
             """
-            INSERT INTO watched_folders(folder_path, recipient_email, display_name, created_at)
-            VALUES(?, ?, ?, ?)
+            INSERT INTO watched_folders(folder_path, recipient_email, additional_recipients, display_name, created_at)
+            VALUES(?, ?, ?, ?, ?)
             """,
-            (normalized, recipient_email.strip(), display_name.strip(), datetime.now().isoformat()),
+            (
+                normalized,
+                primary_recipient,
+                extra_recipients,
+                display_name.strip(),
+                datetime.now().isoformat(),
+            ),
         )
 
 
@@ -235,11 +286,93 @@ def count_recent_errors(window_minutes: int) -> int:
             SELECT COUNT(*) AS error_count
             FROM email_logs
             WHERE status = 'error'
-              AND created_at >= datetime('now', ?)
+              AND datetime(REPLACE(created_at, 'T', ' ')) >= datetime('now', ?)
             """,
             (f"-{window_minutes} minutes",),
         ).fetchone()
     return int(row["error_count"] if row else 0)
+
+
+def get_folder_recipients(folder_row: sqlite3.Row) -> list[str]:
+    recipients = [folder_row["recipient_email"].strip()]
+    additional = folder_row["additional_recipients"].strip()
+    if additional:
+        recipients.extend(item.strip() for item in additional.split(",") if item.strip())
+    return recipients
+
+
+def unique_path(destination_dir: Path, filename: str) -> Path:
+    destination = destination_dir / filename
+    if not destination.exists():
+        return destination
+
+    stem = Path(filename).stem
+    suffix = Path(filename).suffix
+    stamp = datetime.now().strftime("%H%M%S")
+    return destination_dir / f"{stem}_{stamp}{suffix}"
+
+
+def move_to_error_folder(folder_path: str, file_path: Path) -> Path:
+    error_dir = Path(folder_path).expanduser() / "Fehler"
+    error_dir.mkdir(parents=True, exist_ok=True)
+    destination = unique_path(error_dir, file_path.name)
+    shutil.move(str(file_path), str(destination))
+    return destination
+
+
+def browser_roots() -> list[Path]:
+    configured = os.environ.get("FILE2MAIL_BROWSER_ROOTS", "/storage,/scanner")
+    roots = [Path(item.strip()).expanduser() for item in configured.split(",") if item.strip()]
+    available = [root for root in roots if root.exists() and root.is_dir()]
+    return available or [Path("/")]
+
+
+def path_is_browsable(target: Path) -> bool:
+    resolved_target = target.resolve()
+    for root in browser_roots():
+        try:
+            resolved_target.relative_to(root.resolve())
+            return True
+        except ValueError:
+            continue
+    return False
+
+
+def list_browser_entries(target: Path | None = None) -> dict[str, Any]:
+    roots = browser_roots()
+    if target is None:
+        return {
+            "current_path": "",
+            "parent_path": "",
+            "entries": [
+                {
+                    "name": root.name or str(root),
+                    "path": str(root),
+                }
+                for root in roots
+            ],
+            "roots": [str(root) for root in roots],
+        }
+
+    resolved = target.expanduser().resolve()
+    if not resolved.exists() or not resolved.is_dir() or not path_is_browsable(resolved):
+        return list_browser_entries(None)
+
+    entries = []
+    for entry in sorted(resolved.iterdir(), key=lambda item: item.name.lower()):
+        if entry.is_dir() and path_is_browsable(entry):
+            entries.append({"name": entry.name, "path": str(entry)})
+
+    parent_path = ""
+    if path_is_browsable(resolved.parent) and resolved.parent != resolved:
+        parent_path = str(resolved.parent)
+
+    return {
+        "current_path": str(resolved),
+        "parent_path": parent_path,
+        "entries": entries,
+        "roots": [str(root) for root in roots],
+    }
 
 
 def wait_for_stability(file_path: Path, attempts: int = 4, pause_seconds: float = 1.5) -> bool:
@@ -286,8 +419,33 @@ def build_message(settings: dict[str, str], recipient_email: str, file_path: Pat
     return msg
 
 
+def build_test_message(settings: dict[str, str], recipient_email: str) -> EmailMessage:
+    sender_email = settings["sender_email"].strip() or settings["smtp_username"].strip()
+    sender_name = settings["sender_name"].strip()
+    from_value = sender_email if not sender_name else f"{sender_name} <{sender_email}>"
+
+    msg = EmailMessage()
+    msg["From"] = from_value
+    msg["To"] = recipient_email
+    msg["Subject"] = "File-2-Mail Testversand"
+    msg.set_content("Dieser Test wurde erfolgreich ueber File-2-Mail ausgelöst.")
+    return msg
+
+
 def send_email(settings: dict[str, str], recipient_email: str, file_path: Path) -> None:
     msg = build_message(settings, recipient_email, file_path)
+    smtp_port = int(settings["smtp_port"] or "587")
+
+    with smtplib.SMTP(settings["smtp_host"], smtp_port, timeout=30) as server:
+        if settings.get("use_tls", "1") == "1":
+            server.starttls()
+        if settings["smtp_username"].strip():
+            server.login(settings["smtp_username"], settings["smtp_password"])
+        server.send_message(msg)
+
+
+def send_test_email(settings: dict[str, str], recipient_email: str) -> None:
+    msg = build_test_message(settings, recipient_email)
     smtp_port = int(settings["smtp_port"] or "587")
 
     with smtplib.SMTP(settings["smtp_host"], smtp_port, timeout=30) as server:
@@ -371,6 +529,7 @@ def validate_runtime(settings: dict[str, str], watched_folders: list[sqlite3.Row
 
 
 def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: Path) -> None:
+    recipients = get_folder_recipients(folder_row)
     recipient_email = folder_row["recipient_email"]
     folder_path = folder_row["folder_path"]
     filename = file_path.name
@@ -379,18 +538,37 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
         add_log(recipient_email, folder_path, filename, "warning", "Datei ist noch nicht stabil und wird später erneut geprüft.")
         return
 
+    send_errors: list[str] = []
     try:
-        send_email(settings, recipient_email, file_path)
+        for current_recipient in recipients:
+            try:
+                send_email(settings, current_recipient, file_path)
+                add_log(current_recipient, folder_path, filename, "success", "Datei wurde erfolgreich versendet.")
+            except Exception as exc:  # noqa: BLE001
+                error_message = f"Versand fehlgeschlagen: {exc}"
+                send_errors.append(f"{current_recipient}: {exc}")
+                add_log(current_recipient, folder_path, filename, "error", error_message)
+                try:
+                    notify_admin(settings, current_recipient, file_path, error_message)
+                except Exception as admin_exc:  # noqa: BLE001
+                    add_log(current_recipient, folder_path, filename, "warning", f"Admin-Hinweis fehlgeschlagen: {admin_exc}")
+
+        if send_errors:
+            destination = move_to_error_folder(folder_path, file_path)
+            add_log(
+                recipient_email,
+                folder_path,
+                filename,
+                "warning",
+                f"Datei wurde in den Fehler-Ordner verschoben: {destination}",
+            )
+            return
+
         backup_file(settings, recipient_email, file_path)
         file_path.unlink()
-        add_log(recipient_email, folder_path, filename, "success", "Datei wurde erfolgreich versendet.")
     except Exception as exc:  # noqa: BLE001
-        error_message = f"Versand fehlgeschlagen: {exc}"
-        add_log(recipient_email, folder_path, filename, "error", error_message)
-        try:
-            notify_admin(settings, recipient_email, file_path, error_message)
-        except Exception as admin_exc:  # noqa: BLE001
-            add_log(recipient_email, folder_path, filename, "warning", f"Admin-Hinweis fehlgeschlagen: {admin_exc}")
+        destination = move_to_error_folder(folder_path, file_path)
+        add_log(recipient_email, folder_path, filename, "error", f"Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})")
 
 
 class FolderMonitor:
@@ -527,7 +705,7 @@ def dashboard(request: Request, recipient: str = "", status: str = "", search: s
 
 
 @app.get("/settings")
-def settings_page(request: Request):
+def settings_page(request: Request, message: str = "", message_type: str = "info"):
     return templates.TemplateResponse(
         request,
         "settings.html",
@@ -535,21 +713,26 @@ def settings_page(request: Request):
             "settings": get_settings(),
             "watched_folders": get_watched_folders(),
             "active_tab": "mail",
+            "message": message,
+            "message_type": message_type,
         },
     )
 
 
 @app.get("/settings/system")
-def system_settings_page(request: Request):
-    health_state = evaluate_health(get_settings())
+def system_settings_page(request: Request, message: str = "", message_type: str = "info"):
+    current_settings = get_settings()
+    health_state = evaluate_health(current_settings)
     return templates.TemplateResponse(
         request,
         "settings.html",
         {
-            "settings": get_settings(),
+            "settings": current_settings,
             "watched_folders": get_watched_folders(),
             "active_tab": "system",
             "health_state": health_state,
+            "message": message,
+            "message_type": message_type,
         },
     )
 
@@ -653,24 +836,75 @@ def evaluate_health(settings: dict[str, str]) -> dict[str, Any]:
 def healthcheck():
     settings = get_settings()
     health_state = evaluate_health(settings)
-    return {
+    status_code = 200 if health_state["ok"] else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
         "status": "ok" if health_state["ok"] else "unhealthy",
         "watched_folders": len(get_watched_folders()),
         "timestamp": datetime.now().isoformat(timespec="seconds"),
         "issues": health_state["issues"],
         "idle_seconds": health_state["idle_seconds"],
         "recent_error_count": health_state["recent_error_count"],
-    }
+        },
+    )
+
+
+@app.get("/api/browse")
+def browse(path: str = ""):
+    target = Path(path) if path else None
+    return list_browser_entries(target)
+
+
+@app.post("/settings/test-smtp")
+def test_smtp(test_recipient: str = Form("")):
+    settings = get_settings()
+    recipient = test_recipient.strip() or settings.get("sender_email", "").strip() or settings.get("admin_email", "").strip()
+    if not recipient:
+        return RedirectResponse(
+            url=f"/settings?message={quote_plus('Bitte eine Test-E-Mail-Adresse angeben.')}&message_type=error",
+            status_code=303,
+        )
+
+    try:
+        send_test_email(settings, recipient)
+    except Exception as exc:  # noqa: BLE001
+        return RedirectResponse(
+            url=f"/settings?message={quote_plus(f'SMTP-Test fehlgeschlagen: {exc}')}&message_type=error",
+            status_code=303,
+        )
+
+    return RedirectResponse(
+        url=f"/settings?message={quote_plus(f'SMTP-Test erfolgreich an {recipient}.')}&message_type=success",
+        status_code=303,
+    )
 
 
 @app.post("/folders")
 def add_folder(
     folder_path: str = Form(...),
     recipient_email: str = Form(...),
-    display_name: str = Form(""),
+    additional_recipients: list[str] | None = Form(None),
+    display_name: str = Form(...),
 ):
-    insert_watched_folder(folder_path, recipient_email, display_name)
-    return RedirectResponse(url="/settings", status_code=303)
+    normalized_path = folder_path.strip()
+    if not normalized_path or not recipient_email.strip() or not display_name.strip():
+        return RedirectResponse(
+            url=f"/settings?message={quote_plus('Bitte alle Pflichtfelder ausfuellen.')}&message_type=error",
+            status_code=303,
+        )
+
+    if folder_exists(normalized_path):
+        return RedirectResponse(
+            url=f"/settings?message={quote_plus('Dieser Ordner wird bereits ueberwacht.')}&message_type=error",
+            status_code=303,
+        )
+
+    insert_watched_folder(normalized_path, recipient_email, additional_recipients, display_name)
+    return RedirectResponse(
+        url=f"/settings?message={quote_plus('Ordner wurde erfolgreich angelegt.')}&message_type=success",
+        status_code=303,
+    )
 
 
 @app.post("/folders/{folder_id}/toggle")
