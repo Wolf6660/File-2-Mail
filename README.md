@@ -49,6 +49,7 @@ Die Einstellungen bleiben erhalten, solange `./data:/app/data` in der Compose-Da
 
 - In der Oberfläche trägst du deine SMTP-Daten, den Absendernamen, Empfänger und das Prüfintervall ein.
 - Über das Webinterface kannst du überwachte Ordner und den Backup-Ordner frei festlegen.
+- Im Reiter `System & Healthcheck` kannst du einstellen, wann `/health` als gesund oder ungesund gelten soll.
 - Wenn du echte Ordner vom Host überwachen willst, muss dieser Pfad zusätzlich per Docker gemountet werden.
 
 Empfohlen für mehrere frei wählbare Unterordner im Webinterface:

@@ -73,6 +73,32 @@ h1, h2 {
     margin-bottom: 24px;
 }
 
+.tab-bar {
+    display: flex;
+    gap: 12px;
+    flex-wrap: wrap;
+    margin-bottom: 24px;
+}
+
+.tab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px 16px;
+    border-radius: 999px;
+    text-decoration: none;
+    background: rgba(0, 95, 115, 0.08);
+    color: var(--accent);
+    font-weight: 700;
+    border: 1px solid rgba(0, 95, 115, 0.14);
+}
+
+.tab.active {
+    background: var(--accent);
+    color: white;
+    border-color: var(--accent);
+}
+
 .panel,
 .summary-card {
     background: var(--panel);

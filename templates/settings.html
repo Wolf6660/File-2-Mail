@@ -17,6 +17,12 @@
             <a class="button ghost" href="/">Zurück zum Dashboard</a>
         </header>
 
+        <nav class="tab-bar">
+            <a class="tab {% if active_tab == 'mail' %}active{% endif %}" href="/settings">Versand & Ordner</a>
+            <a class="tab {% if active_tab == 'system' %}active{% endif %}" href="/settings/system">System & Healthcheck</a>
+        </nav>
+
+        {% if active_tab == 'mail' %}
         <section class="settings-grid">
             <form class="panel form-panel" method="post" action="/settings">
                 <div class="panel-header">
@@ -92,7 +98,81 @@
                 </form>
             </div>
         </section>
+        {% endif %}
 
+        {% if active_tab == 'system' %}
+        <section class="settings-grid">
+            <form class="panel form-panel" method="post" action="/settings/system">
+                <div class="panel-header">
+                    <h2>Docker Healthcheck</h2>
+                    <p>{{ "Gesund" if health_state and health_state["ok"] else "Pruefung meldet Probleme" }}</p>
+                </div>
+                <div class="form-grid">
+                    <label class="checkbox full">
+                        <input type="checkbox" name="health_fail_on_config_error" value="1" {% if settings['health_fail_on_config_error'] == '1' %}checked{% endif %}>
+                        <span>Healthcheck bei Konfigurationsfehlern auf ungesund setzen</span>
+                    </label>
+                    <label class="checkbox full">
+                        <input type="checkbox" name="health_fail_on_recent_errors" value="1" {% if settings['health_fail_on_recent_errors'] == '1' %}checked{% endif %}>
+                        <span>Healthcheck bei aktuellen Versandfehlern auf ungesund setzen</span>
+                    </label>
+                    <label>
+                        <span>Fehlerfenster in Minuten</span>
+                        <input type="number" name="health_error_window_minutes" value="{{ settings['health_error_window_minutes'] }}" min="0">
+                    </label>
+                    <label>
+                        <span>Maximale Zeit ohne erfolgreichen Prüfzyklus</span>
+                        <input type="number" name="health_max_idle_seconds" value="{{ settings['health_max_idle_seconds'] }}" min="30">
+                    </label>
+                </div>
+                <button class="button" type="submit">Systemeinstellungen speichern</button>
+            </form>
+
+            <div class="panel form-panel">
+                <div class="panel-header">
+                    <h2>Aktueller Status</h2>
+                </div>
+                <div class="stack">
+                    <div class="folder-pill">
+                        <strong>Status</strong>
+                        <span>{{ "healthy" if health_state and health_state["ok"] else "unhealthy" }}</span>
+                    </div>
+                    <div class="folder-pill">
+                        <strong>Leerlauf seit letztem erfolgreichen Zyklus</strong>
+                        <span>{{ health_state["idle_seconds"] if health_state else 0 }} Sekunden</span>
+                    </div>
+                    <div class="folder-pill">
+                        <strong>Fehler im Zeitfenster</strong>
+                        <span>{{ health_state["recent_error_count"] if health_state else 0 }}</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="panel">
+            <div class="panel-header">
+                <h2>Healthcheck Hinweise</h2>
+                <p>Diese Regeln steuern die Antwort von <code>/health</code>.</p>
+            </div>
+            <div class="folder-list">
+                {% if health_state and health_state["issues"] %}
+                    {% for issue in health_state["issues"] %}
+                    <div class="folder-pill">
+                        <strong>Problem</strong>
+                        <span>{{ issue }}</span>
+                    </div>
+                    {% endfor %}
+                {% else %}
+                    <div class="folder-pill">
+                        <strong>Alles in Ordnung</strong>
+                        <span>Aktuell meldet der Healthcheck keine Probleme.</span>
+                    </div>
+                {% endif %}
+            </div>
+        </section>
+        {% endif %}
+
+        {% if active_tab == 'mail' %}
         <section class="panel">
             <div class="panel-header">
                 <h2>Überwachte Ordner</h2>
@@ -128,6 +208,7 @@
                 {% endif %}
             </div>
         </section>
+        {% endif %}
     </div>
 </body>
 </html>

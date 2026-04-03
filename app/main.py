@@ -31,6 +31,10 @@ DEFAULT_SETTINGS = {
     "backup_enabled": "0",
     "backup_folder": "",
     "use_tls": "1",
+    "health_fail_on_config_error": "0",
+    "health_fail_on_recent_errors": "1",
+    "health_error_window_minutes": "15",
+    "health_max_idle_seconds": "180",
 }
 
 
@@ -221,6 +225,23 @@ def get_log_summary() -> list[sqlite3.Row]:
         )
 
 
+def count_recent_errors(window_minutes: int) -> int:
+    if window_minutes <= 0:
+        return 0
+
+    with db_cursor() as connection:
+        row = connection.execute(
+            """
+            SELECT COUNT(*) AS error_count
+            FROM email_logs
+            WHERE status = 'error'
+              AND created_at >= datetime('now', ?)
+            """,
+            (f"-{window_minutes} minutes",),
+        ).fetchone()
+    return int(row["error_count"] if row else 0)
+
+
 def wait_for_stability(file_path: Path, attempts: int = 4, pause_seconds: float = 1.5) -> bool:
     last_size = -1
     stable_reads = 0
@@ -377,6 +398,9 @@ class FolderMonitor:
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._last_config_error = ""
+        self._last_successful_cycle = time.time()
+        self._last_cycle_started = 0.0
+        self._last_cycle_finished = 0.0
 
     def start(self) -> None:
         if not self._thread.is_alive():
@@ -389,6 +413,7 @@ class FolderMonitor:
 
     def _run(self) -> None:
         while not self._stop_event.is_set():
+            self._last_cycle_started = time.time()
             settings = get_settings()
             watched_folders = [row for row in get_watched_folders() if row["is_active"]]
             config_errors = validate_runtime(settings, watched_folders)
@@ -402,6 +427,9 @@ class FolderMonitor:
                 self._last_config_error = ""
                 for folder_row in watched_folders:
                     self._process_folder(settings, folder_row)
+                self._last_successful_cycle = time.time()
+
+            self._last_cycle_finished = time.time()
 
             try:
                 interval = max(int(settings.get("scan_interval", "30") or "30"), 5)
@@ -432,6 +460,14 @@ class FolderMonitor:
 
         for file_path in pdf_files:
             process_file(settings, folder_row, file_path)
+
+    def status(self) -> dict[str, float | str]:
+        return {
+            "last_config_error": self._last_config_error,
+            "last_successful_cycle": self._last_successful_cycle,
+            "last_cycle_started": self._last_cycle_started,
+            "last_cycle_finished": self._last_cycle_finished,
+        }
 
 
 app = FastAPI(title="File-2-Mail")
@@ -498,6 +534,22 @@ def settings_page(request: Request):
         {
             "settings": get_settings(),
             "watched_folders": get_watched_folders(),
+            "active_tab": "mail",
+        },
+    )
+
+
+@app.get("/settings/system")
+def system_settings_page(request: Request):
+    health_state = evaluate_health(get_settings())
+    return templates.TemplateResponse(
+        request,
+        "settings.html",
+        {
+            "settings": get_settings(),
+            "watched_folders": get_watched_folders(),
+            "active_tab": "system",
+            "health_state": health_state,
         },
     )
 
@@ -534,12 +586,80 @@ def save_settings(
     return RedirectResponse(url="/settings", status_code=303)
 
 
+@app.post("/settings/system")
+def save_system_settings(
+    health_fail_on_config_error: str | None = Form(None),
+    health_fail_on_recent_errors: str | None = Form(None),
+    health_error_window_minutes: str = Form("15"),
+    health_max_idle_seconds: str = Form("180"),
+):
+    update_settings(
+        {
+            "health_fail_on_config_error": "1" if health_fail_on_config_error else "0",
+            "health_fail_on_recent_errors": "1" if health_fail_on_recent_errors else "0",
+            "health_error_window_minutes": health_error_window_minutes.strip() or "15",
+            "health_max_idle_seconds": health_max_idle_seconds.strip() or "180",
+        }
+    )
+    return RedirectResponse(url="/settings/system", status_code=303)
+
+
+def evaluate_health(settings: dict[str, str]) -> dict[str, Any]:
+    watched_folders = [row for row in get_watched_folders() if row["is_active"]]
+    config_errors = validate_runtime(settings, watched_folders)
+    monitor_state = monitor.status()
+
+    try:
+        max_idle_seconds = max(int(settings.get("health_max_idle_seconds", "180") or "180"), 30)
+    except ValueError:
+        max_idle_seconds = 180
+
+    try:
+        error_window_minutes = max(int(settings.get("health_error_window_minutes", "15") or "15"), 0)
+    except ValueError:
+        error_window_minutes = 15
+
+    issues: list[str] = []
+
+    if settings.get("health_fail_on_config_error", "0") == "1" and config_errors:
+        issues.extend(config_errors)
+
+    idle_seconds = int(max(0, time.time() - float(monitor_state["last_successful_cycle"] or 0)))
+    if idle_seconds > max_idle_seconds:
+        issues.append(f"Letzter erfolgreicher Prüfzyklus liegt {idle_seconds} Sekunden zurück.")
+
+    recent_error_count = 0
+    if settings.get("health_fail_on_recent_errors", "1") == "1":
+        recent_error_count = count_recent_errors(error_window_minutes)
+        if recent_error_count > 0:
+            issues.append(
+                f"In den letzten {error_window_minutes} Minuten wurden {recent_error_count} Fehler protokolliert."
+            )
+
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "idle_seconds": idle_seconds,
+        "recent_error_count": recent_error_count,
+        "error_window_minutes": error_window_minutes,
+        "max_idle_seconds": max_idle_seconds,
+        "last_config_error": monitor_state["last_config_error"],
+        "last_cycle_started": monitor_state["last_cycle_started"],
+        "last_cycle_finished": monitor_state["last_cycle_finished"],
+    }
+
+
 @app.get("/health")
 def healthcheck():
+    settings = get_settings()
+    health_state = evaluate_health(settings)
     return {
-        "status": "ok",
+        "status": "ok" if health_state["ok"] else "unhealthy",
         "watched_folders": len(get_watched_folders()),
         "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "issues": health_state["issues"],
+        "idle_seconds": health_state["idle_seconds"],
+        "recent_error_count": health_state["recent_error_count"],
     }
 
 
