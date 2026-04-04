@@ -94,6 +94,7 @@
                     <span>Zeit</span>
                     <span>Empfänger</span>
                     <span>Datei</span>
+                    <span>Größe</span>
                     <span>Ordner</span>
                     <span>Status</span>
                     <span>Meldung</span>
@@ -103,6 +104,7 @@
                     <span>{{ log["created_at"].replace('T', ' ') }}</span>
                     <span>{{ log["recipient_email"] }}</span>
                     <span>{{ log["filename"] }}</span>
+                    <span><strong class="{{ file_size_class(log['file_size_bytes']) }}">{{ format_file_size(log["file_size_bytes"]) }}</strong></span>
                     <span>{{ log["folder_path"] }}</span>
                     <span><strong class="status {{ log['status'] }}">{{ log["status"] }}</strong></span>
                     <span>{{ log["message"] }}</span>

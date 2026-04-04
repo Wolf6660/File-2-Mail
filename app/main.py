@@ -86,6 +86,7 @@ def init_db() -> None:
                 notify_on_success INTEGER NOT NULL DEFAULT 0,
                 notify_on_error INTEGER NOT NULL DEFAULT 1,
                 ocr_enabled INTEGER NOT NULL DEFAULT 0,
+                max_file_size_mb INTEGER NOT NULL DEFAULT 0,
                 display_name TEXT NOT NULL DEFAULT '',
                 is_active INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL
@@ -97,6 +98,7 @@ def init_db() -> None:
                 recipient_email TEXT NOT NULL,
                 folder_path TEXT NOT NULL,
                 filename TEXT NOT NULL,
+                file_size_bytes INTEGER NOT NULL DEFAULT 0,
                 status TEXT NOT NULL,
                 message TEXT NOT NULL
             );
@@ -125,6 +127,18 @@ def init_db() -> None:
         if "ocr_enabled" not in watched_folder_columns:
             connection.execute(
                 "ALTER TABLE watched_folders ADD COLUMN ocr_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        if "max_file_size_mb" not in watched_folder_columns:
+            connection.execute(
+                "ALTER TABLE watched_folders ADD COLUMN max_file_size_mb INTEGER NOT NULL DEFAULT 0"
+            )
+
+        email_log_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(email_logs)")
+        }
+        if "file_size_bytes" not in email_log_columns:
+            connection.execute(
+                "ALTER TABLE email_logs ADD COLUMN file_size_bytes INTEGER NOT NULL DEFAULT 0"
             )
 
         existing = {
@@ -169,7 +183,7 @@ def get_watched_folders() -> list[sqlite3.Row]:
             connection.execute(
                 """
                 SELECT id, folder_path, recipient_email, additional_recipients,
-                       notify_email, notify_on_success, notify_on_error, ocr_enabled,
+                       notify_email, notify_on_success, notify_on_error, ocr_enabled, max_file_size_mb,
                        display_name, is_active, created_at
                 FROM watched_folders
                 ORDER BY is_active DESC, recipient_email ASC, folder_path ASC
@@ -183,7 +197,7 @@ def get_watched_folder(folder_id: int) -> sqlite3.Row | None:
         return connection.execute(
             """
             SELECT id, folder_path, recipient_email, additional_recipients,
-                   notify_email, notify_on_success, notify_on_error, ocr_enabled,
+                   notify_email, notify_on_success, notify_on_error, ocr_enabled, max_file_size_mb,
                    display_name, is_active, created_at
             FROM watched_folders
             WHERE id = ?
@@ -238,6 +252,7 @@ def insert_watched_folder(
     notify_on_success: bool,
     notify_on_error: bool,
     ocr_enabled: bool,
+    max_file_size_mb: int,
     display_name: str,
 ) -> None:
     normalized = str(Path(folder_path).expanduser())
@@ -247,10 +262,10 @@ def insert_watched_folder(
             """
             INSERT INTO watched_folders(
                 folder_path, recipient_email, additional_recipients,
-                notify_email, notify_on_success, notify_on_error, ocr_enabled,
+                notify_email, notify_on_success, notify_on_error, ocr_enabled, max_file_size_mb,
                 display_name, created_at
             )
-            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 normalized,
@@ -260,6 +275,7 @@ def insert_watched_folder(
                 1 if notify_on_success else 0,
                 1 if notify_on_error else 0,
                 1 if ocr_enabled else 0,
+                max(max_file_size_mb, 0),
                 display_name.strip(),
                 datetime.now().isoformat(),
             ),
@@ -283,6 +299,7 @@ def update_watched_folder(
     notify_on_success: bool,
     notify_on_error: bool,
     ocr_enabled: bool,
+    max_file_size_mb: int,
     display_name: str,
 ) -> None:
     normalized = str(Path(folder_path).expanduser())
@@ -298,6 +315,7 @@ def update_watched_folder(
                 notify_on_success = ?,
                 notify_on_error = ?,
                 ocr_enabled = ?,
+                max_file_size_mb = ?,
                 display_name = ?
             WHERE id = ?
             """,
@@ -309,6 +327,7 @@ def update_watched_folder(
                 1 if notify_on_success else 0,
                 1 if notify_on_error else 0,
                 1 if ocr_enabled else 0,
+                max(max_file_size_mb, 0),
                 display_name.strip(),
                 folder_id,
             ),
@@ -320,18 +339,26 @@ def delete_folder(folder_id: int) -> None:
         connection.execute("DELETE FROM watched_folders WHERE id = ?", (folder_id,))
 
 
-def add_log(recipient_email: str, folder_path: str, filename: str, status: str, message: str) -> None:
+def add_log(
+    recipient_email: str,
+    folder_path: str,
+    filename: str,
+    status: str,
+    message: str,
+    file_size_bytes: int = 0,
+) -> None:
     with db_cursor() as connection:
         connection.execute(
             """
-            INSERT INTO email_logs(created_at, recipient_email, folder_path, filename, status, message)
-            VALUES(?, ?, ?, ?, ?, ?)
+            INSERT INTO email_logs(created_at, recipient_email, folder_path, filename, file_size_bytes, status, message)
+            VALUES(?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 datetime.now().isoformat(timespec="seconds"),
                 recipient_email,
                 folder_path,
                 filename,
+                max(file_size_bytes, 0),
                 status,
                 message,
             ),
@@ -340,7 +367,7 @@ def add_log(recipient_email: str, folder_path: str, filename: str, status: str, 
 
 def get_logs(recipient: str = "", status: str = "", search: str = "", limit: int = 300) -> list[sqlite3.Row]:
     query = """
-        SELECT id, created_at, recipient_email, folder_path, filename, status, message
+        SELECT id, created_at, recipient_email, folder_path, filename, file_size_bytes, status, message
         FROM email_logs
         WHERE 1=1
     """
@@ -423,6 +450,34 @@ def unique_path(destination_dir: Path, filename: str) -> Path:
     suffix = Path(filename).suffix
     stamp = datetime.now().strftime("%H%M%S")
     return destination_dir / f"{stem}_{stamp}{suffix}"
+
+
+def get_file_size_bytes(file_path: Path) -> int:
+    try:
+        return int(file_path.stat().st_size)
+    except OSError:
+        return 0
+
+
+def format_file_size(file_size_bytes: int) -> str:
+    if file_size_bytes <= 0:
+        return "0 B"
+
+    units = ["B", "KB", "MB", "GB"]
+    size = float(file_size_bytes)
+    unit_index = 0
+    while size >= 1024 and unit_index < len(units) - 1:
+        size /= 1024
+        unit_index += 1
+    return f"{size:.1f} {units[unit_index]}"
+
+
+def file_size_class(file_size_bytes: int) -> str:
+    if file_size_bytes > 10 * 1024 * 1024:
+        return "size-danger"
+    if file_size_bytes > 5 * 1024 * 1024:
+        return "size-warning"
+    return ""
 
 
 def move_to_error_folder(folder_path: str, file_path: Path) -> Path:
@@ -747,6 +802,8 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
     notify_on_success = bool(folder_row["notify_on_success"])
     notify_on_error = bool(folder_row["notify_on_error"])
     ocr_enabled = bool(folder_row["ocr_enabled"])
+    max_file_size_mb = int(folder_row["max_file_size_mb"] or 0)
+    file_size_bytes = get_file_size_bytes(file_path)
 
     try:
         min_age_seconds = max(int(settings.get("file_min_age_seconds", "15") or "15"), 0)
@@ -770,11 +827,24 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
             filename,
             "warning",
             f"Datei ist noch zu neu und wird spaeter erneut geprueft. Mindestalter: {min_age_seconds} Sekunden.",
+            file_size_bytes=file_size_bytes,
         )
         return
 
     if not wait_for_stability(file_path, attempts=stable_checks + 1, pause_seconds=stable_pause_seconds):
-        add_log(recipient_email, folder_path, filename, "warning", "Datei ist noch nicht stabil und wird später erneut geprüft.")
+        add_log(recipient_email, folder_path, filename, "warning", "Datei ist noch nicht stabil und wird später erneut geprüft.", file_size_bytes=file_size_bytes)
+        return
+
+    if max_file_size_mb > 0 and file_size_bytes > max_file_size_mb * 1024 * 1024:
+        destination = move_to_error_folder(folder_path, file_path)
+        add_log(
+            recipient_email,
+            folder_path,
+            filename,
+            "error",
+            f"Datei überschreitet die maximale Größe von {max_file_size_mb} MB und wurde in den Fehler-Ordner verschoben: {destination}",
+            file_size_bytes=file_size_bytes,
+        )
         return
 
     send_errors: list[str] = []
@@ -783,10 +853,11 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
         if ocr_enabled and is_ocr_supported(file_path):
             try:
                 source_file = apply_ocr(file_path)
-                add_log(recipient_email, folder_path, filename, "success", "OCR wurde erfolgreich ausgeführt.")
+                file_size_bytes = get_file_size_bytes(source_file)
+                add_log(recipient_email, folder_path, filename, "success", "OCR wurde erfolgreich ausgeführt.", file_size_bytes=file_size_bytes)
             except Exception as exc:  # noqa: BLE001
                 destination = move_to_error_folder(folder_path, file_path)
-                add_log(recipient_email, folder_path, filename, "error", f"OCR fehlgeschlagen, Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})")
+                add_log(recipient_email, folder_path, filename, "error", f"OCR fehlgeschlagen, Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})", file_size_bytes=file_size_bytes)
                 if notify_email and notify_on_error:
                     try:
                         send_status_notification(
@@ -807,20 +878,21 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                 filename,
                 "warning",
                 "OCR ist aktiviert, wurde fuer diesen Dateityp aber uebersprungen.",
+                file_size_bytes=file_size_bytes,
             )
 
         for current_recipient in recipients:
             try:
                 send_email(settings, current_recipient, source_file)
-                add_log(current_recipient, folder_path, filename, "success", "Datei wurde erfolgreich versendet.")
+                add_log(current_recipient, folder_path, filename, "success", "Datei wurde erfolgreich versendet.", file_size_bytes=file_size_bytes)
             except Exception as exc:  # noqa: BLE001
                 error_message = f"Versand fehlgeschlagen: {exc}"
                 send_errors.append(f"{current_recipient}: {exc}")
-                add_log(current_recipient, folder_path, filename, "error", error_message)
+                add_log(current_recipient, folder_path, filename, "error", error_message, file_size_bytes=file_size_bytes)
                 try:
                     notify_admin(settings, current_recipient, source_file, error_message)
                 except Exception as admin_exc:  # noqa: BLE001
-                    add_log(current_recipient, folder_path, filename, "warning", f"Admin-Hinweis fehlgeschlagen: {admin_exc}")
+                    add_log(current_recipient, folder_path, filename, "warning", f"Admin-Hinweis fehlgeschlagen: {admin_exc}", file_size_bytes=file_size_bytes)
 
         if send_errors:
             destination = move_to_error_folder(folder_path, file_path)
@@ -830,6 +902,7 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                 filename,
                 "warning",
                 f"Datei wurde in den Fehler-Ordner verschoben: {destination}",
+                file_size_bytes=file_size_bytes,
             )
             if notify_email and notify_on_error:
                 try:
@@ -842,7 +915,7 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                         "; ".join(send_errors),
                     )
                 except Exception as notification_exc:  # noqa: BLE001
-                    add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
+                    add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}", file_size_bytes=file_size_bytes)
             return
 
         backup_file(settings, recipient_email, source_file)
@@ -857,13 +930,13 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                     "Datei wurde erfolgreich an alle Empfaenger versendet.",
                 )
             except Exception as notification_exc:  # noqa: BLE001
-                add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
+                add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}", file_size_bytes=file_size_bytes)
         file_path.unlink()
         if source_file != file_path:
             source_file.unlink(missing_ok=True)
     except Exception as exc:  # noqa: BLE001
         destination = move_to_error_folder(folder_path, file_path)
-        add_log(recipient_email, folder_path, filename, "error", f"Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})")
+        add_log(recipient_email, folder_path, filename, "error", f"Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})", file_size_bytes=file_size_bytes)
         if source_file != file_path:
             source_file.unlink(missing_ok=True)
         if notify_email and notify_on_error:
@@ -877,7 +950,7 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                     str(exc),
                 )
             except Exception as notification_exc:  # noqa: BLE001
-                add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
+                add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}", file_size_bytes=file_size_bytes)
 
 
 class FolderMonitor:
@@ -994,6 +1067,10 @@ def recipient_colors(recipients: list[str]) -> dict[str, str]:
         recipient: palette[index % len(palette)]
         for index, recipient in enumerate(sorted(set(recipients)))
     }
+
+
+templates.env.globals["format_file_size"] = format_file_size
+templates.env.globals["file_size_class"] = file_size_class
 
 
 @app.get("/")
@@ -1285,6 +1362,7 @@ def add_folder(
     recipient_email: str = Form(...),
     additional_recipients: list[str] | None = Form(None),
     notify_email: str = Form(""),
+    max_file_size_mb: str = Form("0"),
     notify_on_success: str | None = Form(None),
     notify_on_error: str | None = Form(None),
     ocr_enabled: str | None = Form(None),
@@ -1303,6 +1381,11 @@ def add_folder(
             status_code=303,
         )
 
+    try:
+        max_file_size_value = max(int(max_file_size_mb.strip() or "0"), 0)
+    except ValueError:
+        max_file_size_value = 0
+
     insert_watched_folder(
         normalized_path,
         recipient_email,
@@ -1311,6 +1394,7 @@ def add_folder(
         bool(notify_on_success),
         bool(notify_on_error),
         bool(ocr_enabled),
+        max_file_size_value,
         display_name,
     )
     return RedirectResponse(
@@ -1326,6 +1410,7 @@ def edit_folder(
     recipient_email: str = Form(...),
     additional_recipients: list[str] | None = Form(None),
     notify_email: str = Form(""),
+    max_file_size_mb: str = Form("0"),
     notify_on_success: str | None = Form(None),
     notify_on_error: str | None = Form(None),
     ocr_enabled: str | None = Form(None),
@@ -1344,6 +1429,11 @@ def edit_folder(
             status_code=303,
         )
 
+    try:
+        max_file_size_value = max(int(max_file_size_mb.strip() or "0"), 0)
+    except ValueError:
+        max_file_size_value = 0
+
     update_watched_folder(
         folder_id,
         normalized_path,
@@ -1353,6 +1443,7 @@ def edit_folder(
         bool(notify_on_success),
         bool(notify_on_error),
         bool(ocr_enabled),
+        max_file_size_value,
         display_name,
     )
     return RedirectResponse(

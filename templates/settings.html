@@ -173,6 +173,10 @@
                         <span>Benachrichtigungs-E-Mail optional</span>
                         <input type="email" name="notify_email" placeholder="status@example.de" value="{{ edit_folder['notify_email'] if edit_folder else '' }}">
                     </label>
+                    <label>
+                        <span>Maximale Dateigröße in MB</span>
+                        <input type="number" name="max_file_size_mb" value="{{ edit_folder['max_file_size_mb'] if edit_folder else 0 }}" min="0">
+                    </label>
                     <label class="checkbox">
                         <input type="checkbox" name="ocr_enabled" value="1" {% if edit_folder and edit_folder['ocr_enabled'] %}checked{% endif %}>
                         <span>OCR für diesen Ordner aktivieren</span>
@@ -373,6 +377,7 @@
                     <span>Zeit</span>
                     <span>Empfänger</span>
                     <span>Datei</span>
+                    <span>Größe</span>
                     <span>Ordner</span>
                     <span>Status</span>
                     <span>Meldung</span>
@@ -382,6 +387,7 @@
                     <span>{{ log["created_at"].replace('T', ' ') }}</span>
                     <span>{{ log["recipient_email"] }}</span>
                     <span>{{ log["filename"] }}</span>
+                    <span><strong class="{{ file_size_class(log['file_size_bytes']) }}">{{ format_file_size(log["file_size_bytes"]) }}</strong></span>
                     <span>{{ log["folder_path"] }}</span>
                     <span><strong class="status {{ log['status'] }}">{{ log["status"] }}</strong></span>
                     <span>{{ log["message"] }}</span>
