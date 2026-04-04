@@ -1,4 +1,5 @@
 import os
+import mimetypes
 import shutil
 import smtplib
 import sqlite3
@@ -436,6 +437,14 @@ def ocr_available() -> bool:
     return shutil.which("ocrmypdf") is not None
 
 
+def is_image_file(file_path: Path) -> bool:
+    return file_path.suffix.lower() in {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".gif", ".webp"}
+
+
+def is_ocr_supported(file_path: Path) -> bool:
+    return file_path.suffix.lower() == ".pdf" or is_image_file(file_path)
+
+
 def browser_roots() -> list[Path]:
     configured = os.environ.get("FILE2MAIL_BROWSER_ROOTS", "/storage,/scanner")
     roots = [Path(item.strip()).expanduser() for item in configured.split(",") if item.strip()]
@@ -534,11 +543,17 @@ def build_message(settings: dict[str, str], recipient_email: str, file_path: Pat
     msg["Subject"] = f"Scan: {file_path.name}"
     msg.set_content(f"Im Anhang befindet sich die Datei {file_path.name}.")
 
+    mime_type, _ = mimetypes.guess_type(file_path.name)
+    if mime_type:
+        maintype, subtype = mime_type.split("/", 1)
+    else:
+        maintype, subtype = "application", "octet-stream"
+
     with file_path.open("rb") as handle:
         msg.add_attachment(
             handle.read(),
-            maintype="application",
-            subtype="pdf",
+            maintype=maintype,
+            subtype=subtype,
             filename=file_path.name,
         )
 
@@ -765,7 +780,7 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
     send_errors: list[str] = []
     source_file = file_path
     try:
-        if ocr_enabled:
+        if ocr_enabled and is_ocr_supported(file_path):
             try:
                 source_file = apply_ocr(file_path)
                 add_log(recipient_email, folder_path, filename, "success", "OCR wurde erfolgreich ausgeführt.")
@@ -785,6 +800,14 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                     except Exception as notification_exc:  # noqa: BLE001
                         add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
                 return
+        elif ocr_enabled and not is_ocr_supported(file_path):
+            add_log(
+                recipient_email,
+                folder_path,
+                filename,
+                "warning",
+                "OCR ist aktiviert, wurde fuer diesen Dateityp aber uebersprungen.",
+            )
 
         for current_recipient in recipients:
             try:
@@ -914,15 +937,20 @@ class FolderMonitor:
             return
 
         try:
-            pdf_files = sorted(
-                [entry for entry in folder_path.iterdir() if entry.is_file() and entry.suffix.lower() == ".pdf"],
+            files_to_process = sorted(
+                [
+                    entry for entry in folder_path.iterdir()
+                    if entry.is_file()
+                    and entry.parent.name != "Fehler"
+                    and not entry.name.startswith(".")
+                ],
                 key=lambda item: item.stat().st_mtime,
             )
         except OSError as exc:
             add_log(recipient_email, str(folder_path), "-", "error", f"Ordner konnte nicht gelesen werden: {exc}")
             return
 
-        for file_path in pdf_files:
+        for file_path in files_to_process:
             process_file(settings, folder_row, file_path)
 
     def status(self) -> dict[str, float | str]:

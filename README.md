@@ -8,10 +8,11 @@ File-2-Mail laeuft per Docker auf Raspberry Pi, Synology und anderen Linux-Syste
 - SMTP-Einstellungen mit Testversand
 - Mehrere überwachte Ordner mit eigenem Anzeigenamen
 - Pro Ordner eine Haupt-Empfängeradresse und optionale weitere Empfänger
+- PDF, Bilder und andere Dateien können als Anhang versendet werden
 - Grafische Ordnerauswahl aus dem gemounteten Docker-Bereich
 - Backup-Funktion für versendete Dateien
 - Scanner-Schutz durch Mindestalter, Stabilitätsprüfungen und Prüfpausen
-- OCR pro Ordner einzeln aktivierbar
+- OCR pro Ordner einzeln aktivierbar, wird aber nur für PDFs und Bilddateien angewendet
 - Pro Ordner optionale Benachrichtigungs-E-Mail für Erfolg und/oder Fehler
 - Fehlerhafte Dateien werden in den Unterordner `Fehler` verschoben
 - Dashboard mit farbigen Logs pro Empfänger und Filterung
