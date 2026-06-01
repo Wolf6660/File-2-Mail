@@ -42,6 +42,7 @@ services:
 - Rechts `8000` = interner Port im Container
 
 OCR ist bereits im gleichen Container integriert. Es wird kein zusätzlicher OCR-Container benötigt.
+Der Container nutzt eine neuere Debian-Basis, damit Ghostscript nicht mehr auf der fehlerhaften 10.0.0-Version hängen bleibt.
 
 ## Start
 
