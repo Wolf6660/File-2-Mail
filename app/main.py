@@ -795,6 +795,11 @@ def apply_ocr(file_path: Path) -> Path:
     return output_path
 
 
+def is_known_ghostscript_skip_text_error(message: str) -> bool:
+    lowered = message.lower()
+    return "ghostscript 10.0.0 through 10.02.0" in lowered and "--skip-text" in lowered
+
+
 def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: Path) -> None:
     recipients = get_folder_recipients(folder_row)
     recipient_email = folder_row["recipient_email"]
@@ -858,21 +863,31 @@ def process_file(settings: dict[str, str], folder_row: sqlite3.Row, file_path: P
                 file_size_bytes = get_file_size_bytes(source_file)
                 add_log(recipient_email, folder_path, filename, "success", "OCR wurde erfolgreich ausgeführt.", file_size_bytes=file_size_bytes)
             except Exception as exc:  # noqa: BLE001
-                destination = move_to_error_folder(folder_path, file_path)
-                add_log(recipient_email, folder_path, filename, "error", f"OCR fehlgeschlagen, Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})", file_size_bytes=file_size_bytes)
-                if notify_email and notify_on_error:
-                    try:
-                        send_status_notification(
-                            settings,
-                            notify_email,
-                            folder_row,
-                            file_path,
-                            "Fehler",
-                            f"OCR fehlgeschlagen: {exc}",
-                        )
-                    except Exception as notification_exc:  # noqa: BLE001
-                        add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}")
-                return
+                if is_known_ghostscript_skip_text_error(str(exc)):
+                    add_log(
+                        recipient_email,
+                        folder_path,
+                        filename,
+                        "warning",
+                        "OCR wurde wegen eines bekannten Ghostscript-Problems übersprungen. Die Originaldatei wird trotzdem versendet.",
+                        file_size_bytes=file_size_bytes,
+                    )
+                else:
+                    destination = move_to_error_folder(folder_path, file_path)
+                    add_log(recipient_email, folder_path, filename, "error", f"OCR fehlgeschlagen, Datei wurde in den Fehler-Ordner verschoben: {destination} ({exc})", file_size_bytes=file_size_bytes)
+                    if notify_email and notify_on_error:
+                        try:
+                            send_status_notification(
+                                settings,
+                                notify_email,
+                                folder_row,
+                                file_path,
+                                "Fehler",
+                                f"OCR fehlgeschlagen: {exc}",
+                            )
+                        except Exception as notification_exc:  # noqa: BLE001
+                            add_log(recipient_email, folder_path, filename, "warning", f"Status-Benachrichtigung fehlgeschlagen: {notification_exc}", file_size_bytes=file_size_bytes)
+                    return
         elif ocr_enabled and not is_ocr_supported(file_path):
             add_log(
                 recipient_email,
