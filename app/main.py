@@ -774,6 +774,8 @@ def apply_ocr(file_path: Path) -> Path:
     command = [
         "ocrmypdf",
         "--skip-text",
+        "--output-type",
+        "pdf",
         "--rotate-pages",
         "--deskew",
         "--language",
